@@ -1,0 +1,83 @@
+defaults:
+  - _self_
+  - override hydra/hydra_logging: disabled
+  - override hydra/job_logging: disabled
+
+hydra:
+  output_subdir: null
+  run:
+    dir: .
+
+convert_hf:
+  in_path: "outputs/temp/${model.name}"
+  out_path: "outputs/temp/hf_${model.name}"
+
+# ── Experiment: STOP token training ──
+# Same as extended decision chains, but training data includes negative
+# examples where wrong decision function branches terminate with STOP.
+# 20 functions (a-t), chained in 3-5 steps.
+
+wandb:
+  model_name: "${model.n_layer}l-${model.n_head}h-${model.n_embd}d-decision-chains-stop"
+  proj_name: "superposition_experiment_stop"
+  num_examples_reported: 100
+
+vector:
+  k: 10
+
+data:
+  datapath: outputs/data/decision_chains_stop
+  train_file: "outputs/data/decision_chains_stop/train.json"
+  test_file: "outputs/data/decision_chains_stop/val.json"
+  num_workers: 32
+
+  tokenizer_path: "outputs/tokenizer/tokenizer_decision_chains_stop.json"
+  split_str: "[TRACE]"
+
+  sampling:
+    sample_train_set: False
+    sample_test_set: True
+    sample_val_set: True
+    num_train: 2000000
+    num_val: 5000
+    num_test: 5000
+
+  filter:
+    max_token_length: None
+
+model:
+  name: ${wandb.model_name}
+  batch_size: 256
+  accumulate_grad_batches: 1
+  block_size: 512
+  epochs: 50
+
+  n_layer: 12
+  n_head: 8
+  n_embd: 512
+
+optim:
+  lr_type: None
+  lr: 2e-3
+  warmup_steps: 10
+  weight_decay: 0.01
+  n_steps: ${model.epochs}
+
+eval:
+  num_examples: 512
+  num_train_examples: 512
+  batch_size: 128
+  results_dir: "outputs/eval_results/${model.name}"
+
+  # STOP-specific eval config
+  stop_probe_examples: 256
+  stop_probe_batch_size: 64
+
+inference:
+  modelpath: "outputs/temp/hf_${model.name}"
+  datapath: ${data.datapath}/inference_data/
+  batch_size: 128
+  embed_intermediate_idx: 0
+  sampling:
+    sample_test_set: False
+    num_test: 512

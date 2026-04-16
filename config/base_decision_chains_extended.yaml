@@ -1,0 +1,81 @@
+defaults:
+  - _self_
+  - override hydra/hydra_logging: disabled
+  - override hydra/job_logging: disabled
+
+hydra:
+  output_subdir: null
+  run:
+    dir: .
+
+convert_hf:
+  in_path: "outputs/temp/${model.name}"
+  out_path: "outputs/temp/hf_${model.name}"
+
+# ── Experiment: Extended decision-function-driven chain composition ──
+# 20 functions (a-t), chained in 3-5 steps. Letters determined by decision
+# functions (func_f / func_g) applied to the current vector at each step.
+# Input includes both INPUT and OUTPUT (final) vectors.
+# Train: ~1M examples, test: ~10k examples (disjoint function tuples per length).
+
+wandb:
+  model_name: "${model.n_layer}l-${model.n_head}h-${model.n_embd}d-decision-chains-ext_6_2M"
+  proj_name: "superposition_experiment"
+  num_examples_reported: 100
+
+vector:
+  k: 10
+
+data:
+  datapath: outputs/data/decision_chains_extended
+  train_file: "outputs/data/decision_chains_extended/train.json"
+  test_file: "outputs/data/decision_chains_extended/val.json"
+  num_workers: 32
+
+  tokenizer_path: "outputs/tokenizer/tokenizer_decision_chains_extended.json"
+  split_str: "[TRACE]"
+
+  sampling:
+    sample_train_set: False
+    sample_test_set: True
+    sample_val_set: True
+    num_train: 1000000
+    num_val: 5000
+    num_test: 5000
+
+  filter:
+    max_token_length: None
+
+model:
+  name: ${wandb.model_name}
+  batch_size: 256
+  accumulate_grad_batches: 1
+  block_size: 512       # 3-5 function chains with 6-element vectors
+  epochs: 50
+
+  n_layer: 12
+  n_head: 8
+  n_embd: 512
+
+optim:
+  lr_type: None
+  lr: 2e-3
+  warmup_steps: 10
+  weight_decay: 0.01
+  n_steps: ${model.epochs}
+
+eval:
+  num_examples: 512
+  num_train_examples: 512
+  batch_size: 128
+  results_dir: "outputs/eval_results/${model.name}"
+
+inference:
+  modelpath: "outputs/temp/hf_${model.name}"
+  datapath: ${data.datapath}/inference_data/
+  batch_size: 1024
+  embed_intermediate_idx: 0  # which intermediate result vector to embed (0=first, 1=second, etc.)
+  html_samples: 500  # limit examples in HTML visualization (0=all)
+  sampling:
+    sample_test_set: False
+    num_test: 512

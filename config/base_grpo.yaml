@@ -1,0 +1,65 @@
+defaults:
+  - _self_
+  - override hydra/hydra_logging: disabled
+  - override hydra/job_logging: disabled
+
+hydra:
+  output_subdir: null
+  run:
+    dir: .
+
+# ── GRPO post-training for decision chain models ──
+# Loads a pretrained checkpoint and applies Group Relative Policy Optimization
+# with binary correctness reward.
+
+grpo:
+  pretrained_model: "outputs/temp/hf_12l-8h-512d-decision-chains-ext_6_2M"
+  group_size: 32          # K completions per input for advantage estimation
+  temperature: 1.0        # sampling temperature during generation
+  clip_param: 0.2         # PPO-style clipping epsilon
+  kl_coeff: 0.01          # KL penalty from reference model (lowered: decision mask is main arithmetic protection)
+  n_iterations: 500       # total GRPO update steps
+  inputs_per_batch: 64    # unique prompts per iteration
+  mini_epochs: 1          # passes over generated data per iteration
+  forward_batch_size: 128 # batch size for forward pass and generation (A100 40GB)
+  lr: 5e-5
+  max_grad_norm: 1.0
+  eval_every: 50          # evaluate on test set every N iterations
+  save_every: 200         # save checkpoint every N iterations
+  warmup_iters: 5         # linear LR warmup iterations
+  seed: 42
+
+wandb:
+  proj_name: "superposition_experiment"
+  model_name: "grpo_${model.n_layer}l-${model.n_head}h-${model.n_embd}d-decision-chains-ext_6_2M"
+
+model:
+  name: "${wandb.model_name}"
+  block_size: 512
+  n_layer: 12
+  n_head: 8
+  n_embd: 512
+
+data:
+  train_file: "outputs/data/decision_chains_extended/train.json"
+  test_file: "outputs/data/decision_chains_extended/val.json"
+  tokenizer_path: "outputs/tokenizer/tokenizer_decision_chains_extended.json"
+  split_str: "[TRACE]"
+  num_workers: 32
+  sampling:
+    sample_train_set: False
+    sample_test_set: True
+    sample_val_set: True
+    num_train: 2000000
+    num_val: 5000
+    num_test: 5000
+  filter:
+    max_token_length: None
+
+eval:
+  num_examples: 512
+  batch_size: 128
+
+output:
+  model_dir: "outputs/temp/hf_${model.name}"
+  checkpoint_dir: "outputs/temp/checkpoints/${model.name}"

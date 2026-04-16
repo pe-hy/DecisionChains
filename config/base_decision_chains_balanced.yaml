@@ -1,0 +1,91 @@
+defaults:
+  - _self_
+  - override hydra/hydra_logging: disabled
+  - override hydra/job_logging: disabled
+
+hydra:
+  output_subdir: null
+  run:
+    dir: .
+
+convert_hf:
+  in_path: "outputs/temp/${model.name}"
+  out_path: "outputs/temp/hf_${model.name}"
+
+# ── Experiment: BALANCED healthy + unhealthy chain training ──
+# For each full GT chain of length N, training data contains 2N examples:
+#   N healthy variants: (N-1) partial traces (end at peeked next letter,
+#     loss masked on that letter) + 1 full chain (normal loss).
+#   N unhealthy variants: STOP-terminated wrong-branch traces, one per step.
+# Prompt (INPUT/OUTPUT) is identical across all 2N variants of the same GT.
+# Only chains with every step eligible (f != g) are kept, for exact balance.
+
+wandb:
+  model_name: "${model.n_layer}l-${model.n_head}h-${model.n_embd}d-decision-chains-balanced_v2"
+  proj_name: "superposition_experiment_balanced"
+  num_examples_reported: 100
+
+vector:
+  k: 10
+
+data:
+  datapath: outputs/data/decision_chains_balanced
+  train_file: "outputs/data/decision_chains_balanced/train.json"
+  test_file: "outputs/data/decision_chains_balanced/val.json"
+  num_workers: 32
+
+  tokenizer_path: "outputs/tokenizer/tokenizer_decision_chains_balanced.json"
+  split_str: "[TRACE]"
+
+  sampling:
+    sample_train_set: False
+    sample_test_set: True
+    sample_val_set: True
+    num_train: 2000000
+    num_val: 5000
+    num_test: 5000
+
+  filter:
+    max_token_length: None
+
+model:
+  name: ${wandb.model_name}
+  batch_size: 256
+  accumulate_grad_batches: 1
+  block_size: 512
+  # 16M train examples × 5 epochs / 256 bs ≈ 312k optimizer steps,
+  # matching the stop experiment's effective training length.
+  epochs: 10
+
+  n_layer: 12
+  n_head: 8
+  n_embd: 512
+
+optim:
+  lr_type: None
+  lr: 2e-3
+  # warmup_steps and n_steps are epoch-level here (scheduler interval="epoch"
+  # in train_chains_balanced.py:configure_optimizers). 1 epoch ≈ 62k warmup
+  # steps, cosine decay over the remaining 4 epochs.
+  warmup_steps: 2
+  weight_decay: 0.01
+  n_steps: ${model.epochs}
+
+eval:
+  num_examples: 512
+  num_train_examples: 512
+  batch_size: 128
+  results_dir: "outputs/eval_results/${model.name}"
+
+  # STOP-specific eval config (reused by balanced evaluator)
+  stop_probe_examples: 256
+  stop_probe_batch_size: 64
+
+inference:
+  modelpath: "outputs/temp/hf_${model.name}"
+  datapath: ${data.datapath}/inference_data/
+  batch_size: 128
+  embed_intermediate_idx: 0
+  sampling:
+    sample_test_set: False
+    num_test: 512
