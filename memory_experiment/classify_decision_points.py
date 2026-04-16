@@ -19,7 +19,9 @@ from transformers import AutoModelForCausalLM, PreTrainedTokenizerFast
 SCRIPT_DIR = Path(__file__).resolve().parent
 CHECKPOINT_DIR = SCRIPT_DIR / "checkpoint" / "12l-8h-512d-decision-chains-ext_6_2M"
 HF_DIR = CHECKPOINT_DIR / "hf"
-VAL_DATA_PATH = SCRIPT_DIR.parent / "outputs" / "data" / "decision_chains_extended" / "val.json"
+DATA_DIR = SCRIPT_DIR.parent / "outputs" / "data" / "decision_chains_extended"
+TRAIN_DATA_PATH = DATA_DIR / "train.json"
+VAL_DATA_PATH = DATA_DIR / "val.json"
 
 LETTER_TOKEN_IDS = set(range(67, 87))  # a=67 ... t=86
 TRACE_TOKEN_ID = 87
@@ -76,8 +78,8 @@ def load_model_and_tokenizer(device):
     return model, tokenizer
 
 
-def load_val_data(n_examples):
-    with open(VAL_DATA_PATH) as f:
+def load_data(path, n_examples):
+    with open(path) as f:
         data = json.load(f)
     if n_examples < len(data):
         data = data[:n_examples]
@@ -165,16 +167,8 @@ def prepare_probe_data(hidden_states_layer, labels, attention_mask):
     return h_valid, l_valid
 
 
-def train_probe(X, y, epochs, lr, device):
-    """Train nn.Linear(hidden_dim, 2) probe, return metrics on held-out split."""
-    n = X.shape[0]
-    perm = torch.randperm(n)
-    split = int(0.8 * n)
-    train_idx, val_idx = perm[:split], perm[split:]
-
-    X_train, y_train = X[train_idx], y[train_idx]
-    X_val, y_val = X[val_idx], y[val_idx]
-
+def train_probe(X_train, y_train, X_test, y_test, epochs, lr, device):
+    """Train nn.Linear(hidden_dim, 2) on train data, evaluate on test data."""
     # Class weights for imbalance
     n_pos = (y_train == 1).sum().item()
     n_neg = (y_train == 0).sum().item()
@@ -183,7 +177,7 @@ def train_probe(X, y, epochs, lr, device):
     else:
         weight = None
 
-    hidden_dim = X.shape[1]
+    hidden_dim = X_train.shape[1]
     probe = nn.Linear(hidden_dim, 2).to(device)
     optimizer = torch.optim.Adam(probe.parameters(), lr=lr)
     criterion = nn.CrossEntropyLoss(weight=weight)
@@ -200,12 +194,12 @@ def train_probe(X, y, epochs, lr, device):
             loss.backward()
             optimizer.step()
 
-    # Evaluate
+    # Evaluate on test set
     probe.eval()
     with torch.no_grad():
-        logits = probe(X_val.to(device))
+        logits = probe(X_test.to(device))
         preds = logits.argmax(dim=1).cpu()
-        y_v = y_val.cpu()
+        y_v = y_test.cpu()
 
     tp = ((preds == 1) & (y_v == 1)).sum().item()
     fp = ((preds == 1) & (y_v == 0)).sum().item()
@@ -222,7 +216,8 @@ def train_probe(X, y, epochs, lr, device):
 
 def main():
     parser = argparse.ArgumentParser(description="Decision-point linear probe")
-    parser.add_argument("--n_examples", type=int, default=500)
+    parser.add_argument("--n_train", type=int, default=500, help="Examples from train.json for probe training")
+    parser.add_argument("--n_test", type=int, default=500, help="Examples from val.json for probe testing")
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--probe_epochs", type=int, default=100)
     parser.add_argument("--lr", type=float, default=1e-3)
@@ -232,24 +227,35 @@ def main():
     print(f"Loading model from {CHECKPOINT_DIR}")
     model, tokenizer = load_model_and_tokenizer(args.device)
 
-    print(f"Loading {args.n_examples} examples from {VAL_DATA_PATH}")
-    examples = load_val_data(args.n_examples)
+    # Load train and test data from separate files
+    print(f"Loading {args.n_train} train examples from {TRAIN_DATA_PATH}")
+    train_examples = load_data(TRAIN_DATA_PATH, args.n_train)
+    print(f"Loading {args.n_test} test examples from {VAL_DATA_PATH}")
+    test_examples = load_data(VAL_DATA_PATH, args.n_test)
 
-    print("Tokenizing...")
-    input_ids, attention_mask = tokenize_examples(examples, tokenizer)
-    print(f"  Sequences: {input_ids.shape[0]}, max length: {input_ids.shape[1]}")
+    # Tokenize and label — train
+    print("Tokenizing train...")
+    train_ids, train_mask = tokenize_examples(train_examples, tokenizer)
+    train_labels = label_decision_points(train_ids)
+    n_pos = train_labels.sum().item()
+    n_total = train_mask.sum().item()
+    print(f"  {train_ids.shape[0]} seqs, max len {train_ids.shape[1]}, "
+          f"decision points: {n_pos}/{int(n_total)} ({100*n_pos/n_total:.1f}%)")
 
-    print("Labeling decision points...")
-    labels = label_decision_points(input_ids)
-    n_pos = labels.sum().item()
-    n_total = attention_mask.sum().item()
-    print(f"  Decision points: {n_pos} / {int(n_total)} tokens ({100*n_pos/n_total:.1f}%)")
+    # Tokenize and label — test
+    print("Tokenizing test...")
+    test_ids, test_mask = tokenize_examples(test_examples, tokenizer)
+    test_labels = label_decision_points(test_ids)
+    n_pos = test_labels.sum().item()
+    n_total = test_mask.sum().item()
+    print(f"  {test_ids.shape[0]} seqs, max len {test_ids.shape[1]}, "
+          f"decision points: {n_pos}/{int(n_total)} ({100*n_pos/n_total:.1f}%)")
 
-    # Sanity check: print first example's decision points
-    print("\n--- Sanity check (first example) ---")
-    seq = input_ids[0]
-    lab = labels[0]
-    mask = attention_mask[0]
+    # Sanity check on first test example
+    print("\n--- Sanity check (first test example) ---")
+    seq = test_ids[0]
+    lab = test_labels[0]
+    mask = test_mask[0]
     tokens = tokenizer.convert_ids_to_tokens(seq[mask.bool()].tolist())
     dp_positions = lab[mask.bool()].nonzero(as_tuple=True)[0].tolist()
     for pos in dp_positions:
@@ -259,17 +265,27 @@ def main():
         print(f"  pos {pos}: ...{' '.join(context)}...  (next token = {tokens[pos+1] if pos+1 < len(tokens) else '?'})")
     print()
 
-    print("Extracting hidden states...")
-    all_hidden = extract_hidden_states(model, input_ids, attention_mask, args.batch_size, args.device)
-    print(f"  Layers: {len(all_hidden)} (embedding + {len(all_hidden)-1} transformer)")
+    # Extract hidden states for train and test
+    print("Extracting hidden states (train)...")
+    train_hidden = extract_hidden_states(model, train_ids, train_mask, args.batch_size, args.device)
+    print(f"  Layers: {len(train_hidden)} (embedding + {len(train_hidden)-1} transformer)")
 
+    print("Extracting hidden states (test)...")
+    test_hidden = extract_hidden_states(model, test_ids, test_mask, args.batch_size, args.device)
+
+    # Train probes on train data, evaluate on test data
     print(f"\nTraining linear probes ({args.probe_epochs} epochs each)...")
+    print(f"  Train: {args.n_train} examples from train.json")
+    print(f"  Test:  {args.n_test} examples from val.json")
     print(f"{'Layer':>5} | {'Accuracy':>8} | {'Precision':>9} | {'Recall':>6} | {'F1':>6}")
     print("-" * 48)
 
-    for layer_idx in range(len(all_hidden)):
-        X, y = prepare_probe_data(all_hidden[layer_idx], labels, attention_mask)
-        acc, prec, rec, f1, probe = train_probe(X, y, args.probe_epochs, args.lr, args.device)
+    for layer_idx in range(len(train_hidden)):
+        X_train, y_train = prepare_probe_data(train_hidden[layer_idx], train_labels, train_mask)
+        X_test, y_test = prepare_probe_data(test_hidden[layer_idx], test_labels, test_mask)
+        acc, prec, rec, f1, probe = train_probe(
+            X_train, y_train, X_test, y_test, args.probe_epochs, args.lr, args.device
+        )
         label = "emb" if layer_idx == 0 else str(layer_idx)
         print(f"{label:>5} | {acc:>8.4f} | {prec:>9.4f} | {rec:>6.4f} | {f1:>6.4f}")
 
