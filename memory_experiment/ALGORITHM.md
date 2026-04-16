@@ -1,107 +1,86 @@
-# Residual Stream Injection — Algorithm
+# Surgical Memory Injection
 
-## What it does
+## Goal
 
-We have a pretrained transformer that generates decision chains. At each decision point, it picks a letter (a-t) representing a transformation function. Sometimes the model picks the wrong letter. We want to **surgically correct** one decision point by adding a learned vector to the model's internal representation, without retraining the model.
+Steer the model's letter choices toward f-branch at decision points, without touching arithmetic. The base model (12L-8H-512D GPT-NeoX) is completely frozen. Only a small external memory (~8K params) is trained.
 
-## The mechanism
-
-At a decision point, the token before the letter (`;` or `[TRACE]`) has a hidden state h at each layer. The logits computed from h determine which letter comes next. We learn a single vector V (512 dims) and add it to h at one specific layer:
+## Architecture
 
 ```
-h' = h + V
+frozen layers 0..L-1
+    ↓
+layer L output: h              (B, T, 512)
+    ↓
+query = W_q @ h                project to query space
+attn  = softmax(q @ K^T / √d) attend over N memory entries
+out   = attn @ V               weighted sum of value vectors
+    ↓
+h' = h + out                   inject into residual stream
+    ↓
+frozen layers L+1..11 → logits
 ```
 
-This shifts the logits so the model predicts a different letter. V is optimized via gradient descent (model weights stay frozen).
+Trainable parameters: K (N×512 keys), V (N×512 values), W_q (512×512 query projection). With N=8 entries: 8×512 + 8×512 + 512×512 = 270K params. Everything else is frozen.
 
-## Concrete example
+## Training
 
-```
-Input:  [ 4 , 3 , 8 , 7 , 7 , 4 ]
-Output: [ 2 , 0 , 8 , 4 , 3 , 9 ]
+**Loss = CE_decision + λ · L1_sparsity**
 
-Decision functions on this vector:
-  f([4,3,8,7,7,4]) → letter "n"  (add_first_to_all)
-  g([4,3,8,7,7,4]) → letter "h"  (swap_pairs)
+- **CE_decision**: Cross-entropy at decision-point positions only ([TRACE] and each `;`). Target = f(intermediate_vector)'s letter. Not computed at arithmetic/result/prompt positions.
 
-Baseline generation (no injection):
-  n : 4+4=8, 3+4=7, 8+4=2, 7+4=1, 7+4=1, 4+4=8 R [8,7,2,1,1,8]
-  ; r : ... R [...] ; s : ... R [...] ; q : ... R [2,0,8,4,3,9]
-  ↑ model chose "n" (the f-branch)
+- **L1_sparsity**: Mean |attention weight| across all positions. Pushes memory to output zeros everywhere except where CE demands a correction.
 
-We want to switch to "h" (the g-branch):
-  1. Tokenize full sequence. [TRACE] is at position 31.
-  2. Initialize V = zeros(512).
-  3. Register hook on layer 6: h[31] = h[31] + V
-  4. Forward pass → logits at pos 31 → loss = CrossEntropy(logits, "h")
-  5. Backprop through loss → update V (only V, model frozen)
-  6. Repeat for 200 steps. V converges to |V| ≈ 3.0, P("h") ≈ 1.0.
+The tension: CE wants high attention at decision points (to shift logits toward f's letter). Sparsity wants low attention everywhere. At decision points, CE dominates. At arithmetic positions, sparsity wins and the memory adds nothing to the residual stream.
 
-Generation with V injected:
-  h : (4,3)→(3,4), (8,7)→(7,8), (7,4)→(4,7) R [3,4,7,8,4,7]
-  ; ... (model continues freely with its own f/g logic on the new vector)
+## Metrics
 
-Result: target hit ✓, downstream op_accuracy=6/9, sel_accuracy=8/9
-```
+| Metric | Measures | Expected behavior |
+|--------|----------|-------------------|
+| **f_selection** | Fraction of steps using f's letter | Goes UP (main goal) |
+| **operation_accuracy** | Arithmetic correctness | Stays FLAT (must not break) |
+| **operation_selection** | Letter is valid f or g | Stays high or goes up |
+| **complete_solution** | Full trace correct + output matches | May change (chain path differs) |
 
-## Can this correct errors at arbitrary decision points?
+The key check: f_selection improves while operation_accuracy holds.
 
-**Yes, with a modification.** Currently `memory_inject.py` only targets the first decision point (the `[TRACE]` position) because it's at a fixed position in the prompt.
+## One-example walkthrough
 
-To correct an error at decision point k (e.g., step 3), the approach would be:
+The script prints a detailed before/after showing:
 
-### Step 1: Identify the divergence point
+1. **Both traces** — baseline (memory off) and memory (memory on), with per-step op/sel/f stats
+2. **Decision-point comparison** — at each step, which letter f and g select, what baseline picked, what memory picked, whether it FLIPPED
+3. **Attention weights** — max attention across memory entries at each position type:
+   - Prompt positions: should be near zero (~0.001)
+   - Decision points ([TRACE], `;`): should be high (~0.5-0.9)
+   - Arithmetic positions: should be near zero (~0.001)
 
-Run baseline generation, score with `metrics.py`. The `per_step_sel` field tells you exactly where the model picked a letter that isn't a valid f/g output:
+This directly shows the memory is surgical: active at decisions, silent at arithmetic.
 
-```python
-score = score_trace(input_vec, output_vec, generated_text)
-# score.per_step_sel = [True, True, False, True, True]
-#                                    ↑ divergence at step 2 (0-indexed)
-```
+## Running
 
-### Step 2: Locate the token position
+```bash
+# Default: 500 train, 200 eval, layer 6, 8 entries, 5 epochs
+python main.py
 
-The divergence is at step k. In the token sequence, the decision point for step k is the `;` token before the k-th letter. During generation, we need to:
+# More training data, more entries
+python main.py --n_train 2000 --mem_entries 16 --epochs 10
 
-1. Let the model generate freely up to the `;` before step k
-2. At that `;` position, inject V to steer the next letter
+# Try different layers
+python main.py --layer 3
+python main.py --layer 9
 
-### Step 3: Two-phase generation
+# Show a specific example in detail
+python main.py --show_idx 5
 
-This is the same approach `validate_pretrained/validate.py` already uses for intervention:
-
-```
-Phase 1: Generate normally up to the ; before step k
-          → gives us prompt_ids + gen_ids[:semicolon_pos]
-
-Phase 2: Build a new prefix = prompt + generated_up_to_semicolon
-          Learn V on this prefix (teacher-forced with correct continuation)
-          Generate from this prefix with V injected at the semicolon position
+# Tune sparsity (higher = more silent, lower = more active)
+python main.py --sparsity 0.01
+python main.py --sparsity 1.0
 ```
 
-The key difference from the current script: the injection position isn't fixed — it depends on how long the model's generation is up to step k. But the mechanism (learn V, add to residual stream, generate) is identical.
+## Design notes
 
-### Implementation sketch
+**Why f-only targeting?** The pretrained model sees f and g as equally valid (50-50 in training data). By defining "correct = f's letter", we give the memory a single ground truth per decision point. This is analogous to fine-tuning on a restricted domain where the correct behavior is unambiguous.
 
-```python
-# 1. Generate baseline
-baseline_text = generate_baseline(model, tokenizer, prompt_ids, device)
-baseline_score = score_trace(input_vec, output_vec, baseline_text)
+**Why not detect-then-fix?** The old pipeline (`memory_inject.py`) generates a trace, finds the first error, learns a per-example correction vector, re-generates. This is a two-step process where detection and correction are separate. The new approach integrates correction into generation — the memory fires automatically at decision points via learned key matching. No explicit detection step.
 
-# 2. Find first wrong step
-for step, sel_ok in enumerate(baseline_score.per_step_sel):
-    if not sel_ok:
-        break  # step = divergence point
-
-# 3. Find the ; position before that step in the generated tokens
-gen_ids = tokenizer.encode(baseline_text, add_special_tokens=False)
-semicolon_positions = [i for i, t in enumerate(gen_ids) if t == semicolon_id]
-inject_pos = len(prompt_ids) + semicolon_positions[step - 1]  # position of ; before step k
-
-# 4. Build prefix up to that point, learn V, generate with V
-prefix = prompt_ids + gen_ids[:semicolon_positions[step - 1] + 1]
-# ... same learn_value_vector / generate_with_injection logic
-```
-
-This is a natural extension — the current script proves the mechanism works at the first decision point, and the same approach generalizes to any step.
+**The cascading issue.** Changing the letter at step k changes the intermediate vector. Steps k+1, k+2, ... now operate on a different vector, so f and g select different letters. This is correct — the model runs its program on the new path. The right metric is operation_accuracy (does the arithmetic stay correct?), not "are the downstream letters the same?" (they won't be).
