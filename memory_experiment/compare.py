@@ -24,7 +24,8 @@ def main():
     ap.add_argument("--only", default="", help="comma-separated names to include")
     args = ap.parse_args()
 
-    paths = sorted(RESULTS_DIR.glob("*.json"))
+    # Skip hidden/helper files (e.g. _baseline_cache_*.json).
+    paths = sorted(p for p in RESULTS_DIR.glob("*.json") if not p.name.startswith("_"))
     runs = [json.load(open(p)) for p in paths]
     if args.only:
         keep = set(args.only.split(","))

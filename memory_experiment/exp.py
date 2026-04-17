@@ -476,15 +476,7 @@ def main():
         json.dump(result, f, indent=2, default=str)
     print(f"\nSaved to {save_path}")
 
-    print("\n── Summary ──")
-    hdr = f"  {'metric':24s}  {'BL/ffff':>8s}  {'MEM/ffff':>8s}  {'Δ':>+8s}    {'BL/full':>8s}  {'MEM/full':>8s}  {'Δ':>+8s}"
-    print(hdr)
-    for k in ["operation_accuracy", "f_selection", "full_f_alignment", "complete_solution"]:
-        b_fo = baseline_fo.get(k, 0); m_fo = with_mem_fo.get(k, 0)
-        b_fu = baseline_fu.get(k, 0); m_fu = with_mem_fu.get(k, 0)
-        print(f"  {k:24s}  {b_fo:>8.4f}  {m_fo:>8.4f}  {m_fo-b_fo:>+8.4f}    "
-              f"{b_fu:>8.4f}  {m_fu:>8.4f}  {m_fu-b_fu:>+8.4f}")
-
+    # ── Log eval metrics to W&B FIRST (before anything that could crash).
     if wandb_run is not None:
         flat = {"train_time_sec": train_time, "trainable_params": n_params}
         for slice_, m in [("ffff_baseline", baseline_fo),
@@ -504,6 +496,15 @@ def main():
         wandb_run.log(flat)
         wandb_run.summary.update(flat)
         wandb_run.finish()
+
+    print("\n── Summary ──")
+    hdr = f"  {'metric':24s}  {'BL/ffff':>8s}  {'MEM/ffff':>8s}  {'Δ':>8s}    {'BL/full':>8s}  {'MEM/full':>8s}  {'Δ':>8s}"
+    print(hdr)
+    for k in ["operation_accuracy", "f_selection", "full_f_alignment", "complete_solution"]:
+        b_fo = baseline_fo.get(k, 0); m_fo = with_mem_fo.get(k, 0)
+        b_fu = baseline_fu.get(k, 0); m_fu = with_mem_fu.get(k, 0)
+        print(f"  {k:24s}  {b_fo:>8.4f}  {m_fo:>8.4f}  {m_fo-b_fo:>+8.4f}    "
+              f"{b_fu:>8.4f}  {m_fu:>8.4f}  {m_fu-b_fu:>+8.4f}")
 
     for h in handles:
         h.remove()

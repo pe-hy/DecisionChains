@@ -216,17 +216,23 @@ End-to-end (only meaningful on `ffff` val):
 |---|---|
 | `exp.py` | Unified experiment runner. One invocation = one config = one JSON. |
 | `compare.py` | Loads `outputs/experiments/*.json` and prints ranked tables. |
-| `run_experiments.sh` | 27-variant main sweep (ingredient ablations, layer / memory / multi-layer, speed levers, LR, seeds). |
-| `run_data_efficiency.sh` | 18-variant sweep: how few examples suffice? `n_train × epochs × mem_entries`. |
+| `run_all_phases.sh` | Master overnight sweep: Phase 1 → Phase 2 → Phase 3 → summarize. |
+| `run_phase1.sh` | 46-run screening sweep at `n_eval=50`. Tests every dimension at the new working point. |
+| `run_phase2.py` | Takes Phase 1 JSONs, picks top-5 by full-val f_selection, confirms with 3 seeds at `n_eval=200`. |
+| `run_phase3.py` | Combines best layer/sparsity/mem/lr/bs from Phase 1; runs compound × compute budgets × 3 seeds at `n_eval=300`. |
+| `summarize_sweep.py` | Builds `outputs/final_results.md` from all phase JSONs. |
 | `metrics.py` | Trace parsing, scoring, aggregation. |
 | `checkpoint/12l-8h-512d-decision-chains-ext_6_2M/` | Pretrained LitGPT + HF copy. |
 | `outputs/experiments/` | Per-experiment result JSONs (config, history, metrics). |
-| `outputs/E1-E4_results.{md,txt}` | Pilot comparison table (screenshot-ready). |
-| `logs/` | Old run stdout logs and archived `wandb/`. |
-| `wandb/` | Active W&B run directory (auto-regenerated; future runs write into `logs/wandb/` via `WANDB_DIR`). |
+| `outputs/E1-E4_results.{md,txt}` | Pilot 2×2 comparison table. |
+| `outputs/data_efficiency_results.txt` | 18-run data-efficiency sweep result. |
+| `outputs/final_results.md` | Written by `summarize_sweep.py` after the full sweep. |
+| `old_scripts/` | Archived earlier sweep scripts superseded by `run_all_phases.sh`. |
+| `logs/` | All stdout logs + archived `wandb/`. |
+| `wandb/` | Current W&B run dir (runs launched via scripts go into `logs/wandb/` via `WANDB_DIR`). |
 | `CLAUDE.md` | Pointer file for Claude Code; defers to this README. |
 | `README.md` | This file. |
-| `DIAGRAM.txt` | One-page ASCII diagram: pipeline + memory internals + loss + split + eval. Open this first. |
+| `DIAGRAM.txt` | One-page ASCII diagram. Open this first. |
 
 ---
 

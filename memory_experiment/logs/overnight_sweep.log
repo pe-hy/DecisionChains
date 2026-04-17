@@ -1,0 +1,31 @@
+==========================================
+ OVERNIGHT SWEEP — Fri Apr 17 17:00:33 CEST 2026
+==========================================
+
+>>> PHASE 1: screening (Fri Apr 17 17:00:33 CEST 2026)
+==== START A1_ref ====
+wandb: Currently logged in as: petr-hyner10 to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
+wandb: WARNING Using a boolean value for 'reinit' is deprecated. Use 'return_previous' or 'finish_previous' instead.
+wandb: creating run
+wandb: Tracking run with wandb version 0.20.1
+wandb: Run data is saved locally in logs/wandb/run-20260417_170042-pveqmmn1
+wandb: Run `wandb offline` to turn off syncing.
+wandb: Syncing run A1_ref
+wandb: ⭐️ View project at https://wandb.ai/petr-hyner10/memory-experiment
+wandb: 🚀 View run at https://wandb.ai/petr-hyner10/memory-experiment/runs/pveqmmn1
+
+=== Experiment: A1_ref ===
+  data=all  ce=full_seq  dp_target=f
+  layers=[10]  mem_entries=32  gate=True
+  sparsity=none (coeff=0.1)
+  n_train=3000  n_eval=50  epochs=10  lr=0.001  seed=0
+
+Loading model...
+Loading data...
+  train: 3000 (filter=all)
+  val ffff: 50   val full: 50
+Preparing training data...
+  3000 examples, 533782 supervised tokens, 11928 DP letter positions (4.0 per ex)
+
+── Baseline ──
+BL/ffff:   0%|          | 0/50 [00:00<?, ?it/s]BL/ffff:   2%|▏         | 1/50 [00:04<04:03,  4.98s/it]BL/ffff:   4%|▍         | 2/50 [00:11<04:50,  6.06s/it]BL/ffff:   6%|▌         | 3/50 [00:13<03:08,  4.02s/it]BL/ffff:   8%|▊         | 4/50 [00:15<02:32,  3.31s/it]BL/ffff:  10%|█         | 5/50 [00:17<02:03,  2.75s/it]BL/ffff:  12%|█▏        | 6/50 [00:19<01:54,  2.59s/it]BL/ffff:  14%|█▍        | 7/50 [00:21<01:35,  2.21s/it]BL/ffff:  16%|█▌        | 8/50 [00:22<01:28,  2.11s/it]BL/ffff:  18%|█▊        | 9/50 [00:25<01:25,  2.09s/it]BL/ffff:  20%|██        | 10/50 [00:27<01:25,  2.14s/it]BL/ffff:  22%|██▏       | 11/50 [00:29<01:20,  2.05s/it]BL/ffff:  24%|██▍       | 12/50 [00:30<01:15,  1.98s/it]BL/ffff:  26%|██▌       | 13/50 [00:32<01:09,  1.87s/it]BL/ffff:  28%|██▊       | 14/50 [00:34<01:09,  1.92s/it]BL/ffff:  30%|███       | 15/50 [00:38<01:33,  2.67s/it]BL/ffff:  32%|███▏      | 16/50 [00:41<01:25,  2.53s/it]BL/ffff:  34%|███▍      | 17/50 [00:44<01:34,  2.87s/it]BL/ffff:  36%|███▌      | 18/50 [00:47<01:30,  2.82s/it]BL/ffff:  38%|███▊      | 19/50 [00:48<01:13,  2.37s/it]BL/ffff:  40%|████      | 20/50 [00:50<01:08,  2.29s/it]BL/ffff:  42%|████▏     | 21/50 [00:53<01:04,  2.24s/it]BL/ffff:  44%|████▍     | 22/50 [00:54<00:52,  1.89s/it]BL/ffff:  46%|████▌     | 23/50 [00:56<00:52,  1.95s/it]BL/ffff:  48%|████▊     | 24/50 [00:57<00:44,  1.73s/it]
