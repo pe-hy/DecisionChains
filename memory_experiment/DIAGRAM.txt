@@ -1,0 +1,123 @@
+╔══════════════════════════════════════════════════════════════════════════════╗
+║   Memory-Steered Decision Chains  —  one-page diagram                        ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+PROMPT (one example):
+  [BOS] INPUT : [4,3,8,7,7,4] OUTPUT : [2,0,8,4,3,9] [TRACE]    ► autoregressive
+
+Decision functions on the current intermediate vector v:
+  f(v) = is_even(v[0])·10 + v[1]   →   index 0..19   →   letter a..t
+  g(v) = is_even(v[3])·10 + v[4]   →   index 0..19   →   letter a..t
+
+For v=[4,3,8,7,7,4]:   f → 'n' (add_first_to_all)
+                       g → 'h' (swap_pairs)
+The pretrained model picks 50/50 because both were valid in pretraining.
+ALIGNMENT GOAL: always pick f, without touching the base model.
+
+
+── FORWARD PASS WITH MEMORY HOOK ─────────────────────────────────────────────
+
+   tokens  ─►  ┌─────────────────────────┐
+               │   layers 0 .. L-1       │   FROZEN   (~30 M params)
+               └────────────┬────────────┘
+                            ▼   hidden  h ∈ ℝ^{B × T × D},  D = 512
+               ┌─────────────────────────┐
+               │   layer L               │   FROZEN
+               └────────────┬────────────┘
+                            ▼   h
+   ╔════════════════════════════════════════════════════════════════════╗
+   ║  EXTERNAL MEMORY   ←  ONLY THIS IS TRAINED  (≈ 270 K params)       ║
+   ║                                                                    ║
+   ║      h ── [ W_q ] ──► q                                            ║
+   ║                       │                                            ║
+   ║                       ▼                                            ║
+   ║                  q · Kᵀ / √D                                       ║
+   ║                       │                                            ║
+   ║                       ▼                                            ║
+   ║                  softmax(·)  ──►  attn ∈ ℝ^{B × T × N}             ║
+   ║                       │                                            ║
+   ║                       ▼                                            ║
+   ║                  attn · V                                          ║
+   ║                       │                                            ║
+   ║                       ▼                                            ║
+   ║                  out  =  γ · (attn · V)        ◄── γ optional gate ║
+   ╚════════════════════════════════════════════════════════════════════╝
+                            ▼
+                   h'  =  h  +  out         ◄── injected into residual
+                            ▼
+               ┌─────────────────────────┐
+               │   layers L+1 .. 11      │   FROZEN
+               └────────────┬────────────┘
+                            ▼
+                         logits  ─►  next-token softmax
+
+
+── WHAT IS WHAT ──────────────────────────────────────────────────────────────
+
+  Trained:    K   (N × D)        ─ keys     "this position needs steering"
+              V   (N × D)        ─ values   "the correction vector to add"
+              W_q (D × D)        ─ query projection
+              γ   (1)  optional  ─ scalar gate on the correction
+              ≈ 270 K params total  (W_q ≈ 262 K dominates)
+
+  Frozen:     everything else  (~30 M base-model params)
+
+  Defaults:   B = batch,  T ≤ 512,  D = 512,  L = 10,  N ∈ {16, 32}
+
+
+── LOSS ──────────────────────────────────────────────────────────────────────
+
+   L  =  CE_target   +   λ · sparsity_term
+
+   CE_target  ──  what the model should output  (--ce_mode)
+       dp_only       CE only at DP letter positions   (3–5 tokens / example)
+       full_seq      CE at every token after [TRACE]  (~20× more signal)
+
+   target letter at a DP  (--dp_target)
+       gt    use the letter from the GT trace  (may be mixed f / g)
+       f     use f(current_intermediate_vec)   ← the alignment override
+
+   sparsity_term  ──  surgicality penalty  (--sparsity, coef λ)
+       none      0
+       l2_nondp  mean ‖mem_out‖₂ over NON-DP valid positions
+                 → pushes correction → 0 where CE doesn't demand it
+                 (Old L1-on-softmax was a no-op: softmax sums to 1.)
+
+
+── WHERE THE LOSS APPLIES (one trace) ────────────────────────────────────────
+
+  [BOS] INPUT : [4,3,8,7,7,4] OUTPUT : [2,0,8,4,3,9] [TRACE] n : 4+4=8 , … R [..] ; r : … ;
+  └─────────────────── prompt (no CE) ──────────────────┘  ▲  └── arithmetic ──┘ ▲
+                                                           │                     │
+                                                       DP letter            DP letter
+                                                        target = f's          target = f's
+                                                       letter at v0          letter at v1
+
+  CE_target  ▲ at letters after [TRACE] / each ;  (with --ce_mode dp_only this is ALL)
+                ── with --ce_mode full_seq, every output token also gets CE ──
+  sparsity   ▼ at every other valid position  (only when --sparsity l2_nondp)
+
+
+── DATA  /  TRAIN-VAL SPLIT ──────────────────────────────────────────────────
+
+   Letter tuples                144 297 train  ▕  4 904 val      0 overlap
+   Input vectors (sampled)       62 285 train  ▕  4 275 val      0 overlap
+   Coin-flip patterns (ffff,…)         56 train  ▕     56 val   uniform, shared
+
+   ⇒ val tests COMPOSITIONAL generalization on novel letter tuples & vectors.
+   ⇒ filtering training to "ffff" is a coin-flip selection (not biased on
+     inputs); the memory then only sees hidden states from f-paths, which
+     is the off-path generalization risk for inference-time steering.
+
+
+── EVALUATION  (always two passes) ───────────────────────────────────────────
+
+   ffff val   compositional generalization on the all-f subset.
+              Required slice for `complete_solution` to be meaningful
+              (final vec = GT OUTPUT only matches on the f-path).
+   full val   compositional generalization across MIXED coin-flip patterns.
+              The honest test of inference-time alignment.
+
+   PRIMARY  ─  f_selection        fraction of DPs the model picked f at
+   STRICT   ─  full_f_alignment   fraction of EXAMPLES that were all-f
+   FLOOR    ─  operation_accuracy arithmetic correctness, must not regress

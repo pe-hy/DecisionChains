@@ -1,10 +1,27 @@
 """
 Metrics for evaluating decision-chain traces.
 
-Provides three core metrics:
-  - operation_accuracy:  is the arithmetic in each block correct?
-  - operation_selection: is each letter a valid f/g decision-function output?
-  - complete_solution:   all ops correct + all sels correct + final vec = OUTPUT
+Primary metrics for alignment analysis (f-only target):
+  - operation_accuracy:       is the arithmetic in each block correct?
+  - f_selection:              fraction of steps where letter == f's letter
+                              (averaged over steps, so shorter chains count less)
+  - full_f_alignment:         fraction of EXAMPLES where every step picked f
+  - per_step_f_selection:     f-rate broken out by step index (diagnostic)
+
+Sanity metrics (pre-alignment semantics):
+  - f_or_g_valid_selection:   letter ∈ {f_letter, g_letter} — says the model is
+                              still producing plausible decision-function output,
+                              but doesn't care whether f or g was picked. This
+                              used to be called `operation_selection`; the old
+                              name was misleading under alignment.
+  - chain_matches_output:     final vec = GT OUTPUT vec (only meaningful when
+                              GT is the f-path, i.e. on ffff val)
+  - complete_solution:        all ops correct AND all sels valid AND final=OUTPUT
+
+Intermediate-vector advancement rule (used in both scoring paths):
+  if the letter is known, advance via correct execution of that letter
+  (apply_letter). This gives the alignment semantic: "what would f pick at the
+  true next state, assuming the letter choice was the only action".
 
 Usage:
     from metrics import score_trace, aggregate_scores, extract_input_output
@@ -330,11 +347,14 @@ class TraceScore:
     n_steps: int
     op_correct: int             # blocks with correct arithmetic
     sel_correct: int            # letters matching f or g
+    f_hits: int                 # letters matching f specifically
     chain_matches_output: bool  # final vec == OUTPUT vec
     full_correct: bool          # all ops + all sels + output match
     per_step_op: list[bool] = field(default_factory=list)
     per_step_sel: list[bool] = field(default_factory=list)
+    per_step_f: list[bool] = field(default_factory=list)
     per_step_letter: list[str] = field(default_factory=list)
+    per_step_f_letter: list[str] = field(default_factory=list)
 
     @property
     def op_accuracy(self) -> float:
@@ -342,7 +362,16 @@ class TraceScore:
 
     @property
     def sel_accuracy(self) -> float:
+        """f-OR-g validity rate. Kept under the legacy name for callers."""
         return self.sel_correct / self.n_steps if self.n_steps > 0 else 0.0
+
+    @property
+    def f_selection_rate(self) -> float:
+        return self.f_hits / self.n_steps if self.n_steps > 0 else 0.0
+
+    @property
+    def full_f_aligned(self) -> bool:
+        return self.n_steps > 0 and self.f_hits == self.n_steps
 
 
 def score_trace(
@@ -373,17 +402,21 @@ def _score_blocks(
     current: list[int] | None = list(input_vec)
     op_correct = 0
     sel_correct = 0
+    f_hits = 0
     per_step_op: list[bool] = []
     per_step_sel: list[bool] = []
+    per_step_f: list[bool] = []
     per_step_letter: list[str] = []
+    per_step_f_letter: list[str] = []
 
     for b in blocks:
         letter_known = b.letter in LETTER_TO_OP
         per_step_letter.append(b.letter)
 
-        # --- Operation selection ---
-        # Is the letter a valid output of f or g given the current vector?
-        # Guard against OOR vectors (elements must be in 0..9 for decision funcs).
+        # --- Decision-function evaluation ---
+        # Given the current intermediate vector, what would f and g pick?
+        # sel_ok: letter is a valid f-or-g output (legacy "operation_selection").
+        # is_f:   letter is specifically f's output (the alignment signal).
         if (
             current is not None
             and len(current) >= 5
@@ -392,11 +425,18 @@ def _score_blocks(
         ):
             lf, lg = decision_letters(current)
             sel_ok = b.letter in (lf, lg)
+            is_f = (b.letter == lf)
+            per_step_f_letter.append(lf)
         else:
             sel_ok = False
+            is_f = False
+            per_step_f_letter.append("")
         per_step_sel.append(sel_ok)
+        per_step_f.append(is_f)
         if sel_ok:
             sel_correct += 1
+        if is_f:
+            f_hits += 1
 
         # --- Operation accuracy ---
         # Re-execute the letter on current vec, compare full block text.
@@ -409,8 +449,12 @@ def _score_blocks(
         if op_ok:
             op_correct += 1
 
-        # Advance vector. Prefer recomputed when valid; fall back to parsed.
-        if op_ok and expected_vec is not None:
+        # Advance vector. Alignment semantic: given the letter the model picked,
+        # advance as if it were executed correctly. This way the next-step f/g
+        # comparison is against the true-next-state, not the model's own
+        # possibly-buggy arithmetic. Falls back to parsed vec if the letter is
+        # unknown.
+        if letter_known and expected_vec is not None:
             current = expected_vec
         elif b.vec is not None:
             current = b.vec
@@ -431,11 +475,14 @@ def _score_blocks(
         n_steps=n_steps,
         op_correct=op_correct,
         sel_correct=sel_correct,
+        f_hits=f_hits,
         chain_matches_output=chain_matches_output,
         full_correct=full_correct,
         per_step_op=per_step_op,
         per_step_sel=per_step_sel,
+        per_step_f=per_step_f,
         per_step_letter=per_step_letter,
+        per_step_f_letter=per_step_f_letter,
     )
 
 
@@ -450,15 +497,35 @@ def aggregate_scores(scores: list[TraceScore]) -> dict:
     total_ops = sum(s.n_steps for s in scores)
     op_correct = sum(s.op_correct for s in scores)
     sel_correct = sum(s.sel_correct for s in scores)
+    f_hits = sum(s.f_hits for s in scores)
     full_correct = sum(1 for s in scores if s.full_correct)
+    full_f = sum(1 for s in scores if s.full_f_aligned)
     chain_match = sum(1 for s in scores if s.chain_matches_output)
+
+    # Per-step f_selection. Denominator at step i = number of examples whose
+    # chain reached step i. Shorter chains contribute to fewer slots.
+    max_steps = max((s.n_steps for s in scores), default=0)
+    per_step_hits = [0] * max_steps
+    per_step_denom = [0] * max_steps
+    for s in scores:
+        for i in range(s.n_steps):
+            per_step_denom[i] += 1
+            if i < len(s.per_step_f) and s.per_step_f[i]:
+                per_step_hits[i] += 1
+    per_step_f_rate = [
+        h / d if d else 0.0 for h, d in zip(per_step_hits, per_step_denom)
+    ]
 
     return {
         "num_examples": n,
         "operation_accuracy": op_correct / total_ops if total_ops > 0 else 0.0,
-        "operation_selection": sel_correct / total_ops if total_ops > 0 else 0.0,
+        "f_or_g_valid_selection": sel_correct / total_ops if total_ops > 0 else 0.0,
+        "f_selection": f_hits / total_ops if total_ops > 0 else 0.0,
+        "full_f_alignment": full_f / n,
         "chain_matches_output": chain_match / n,
         "complete_solution": full_correct / n,
+        "per_step_f_selection": per_step_f_rate,
+        "per_step_denominator": per_step_denom,
     }
 
 

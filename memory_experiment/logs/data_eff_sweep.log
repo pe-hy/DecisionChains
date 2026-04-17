@@ -1,0 +1,80 @@
+wandb: Currently logged in as: petr-hyner10 to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
+wandb: WARNING Using a boolean value for 'reinit' is deprecated. Use 'return_previous' or 'finish_previous' instead.
+wandb: creating run
+wandb: Tracking run with wandb version 0.20.1
+wandb: Run data is saved locally in /mnt/raid/data/Hyner_Petr/operations_entropy/DecisionChains/memory_experiment/wandb/run-20260417_130345-l0mdiym4
+wandb: Run `wandb offline` to turn off syncing.
+wandb: Syncing run D_n10_e50
+wandb: ⭐️ View project at https://wandb.ai/petr-hyner10/memory-experiment
+wandb: 🚀 View run at https://wandb.ai/petr-hyner10/memory-experiment/runs/l0mdiym4
+
+=== Experiment: D_n10_e50 ===
+  data=all  ce=full_seq  dp_target=f
+  layers=[10]  mem_entries=32  gate=True
+  sparsity=none (coeff=0.1)
+  n_train=10  n_eval=150  epochs=50  lr=0.001  seed=0
+
+Loading model...
+Loading data...
+  train: 10 (filter=all)
+  val ffff: 150   val full: 150
+Preparing training data...
+  10 examples, 1760 supervised tokens, 40 DP letter positions (4.0 per ex)
+
+── Baseline (cached from _baseline_cache_n150.json) ──
+
+── Training (32 entries, 294,913 params, layers=[10]) ──
+  epoch 1/50  CE=0.0488  sp=0.0000  ||out||_DP=0.080  ||out||_other=0.080  gate=1.002
+  epoch 2/50  CE=0.0890  sp=0.0000  ||out||_DP=0.092  ||out||_other=0.092  gate=1.003
+  epoch 3/50  CE=0.0760  sp=0.0000  ||out||_DP=0.110  ||out||_other=0.110  gate=1.005
+  epoch 4/50  CE=0.0687  sp=0.0000  ||out||_DP=0.129  ||out||_other=0.129  gate=1.007
+  epoch 5/50  CE=0.0865  sp=0.0000  ||out||_DP=0.150  ||out||_other=0.150  gate=1.009
+  epoch 6/50  CE=0.0829  sp=0.0000  ||out||_DP=0.172  ||out||_other=0.172  gate=1.011
+  epoch 7/50  CE=0.0686  sp=0.0000  ||out||_DP=0.196  ||out||_other=0.195  gate=1.013
+  epoch 8/50  CE=0.0979  sp=0.0000  ||out||_DP=0.221  ||out||_other=0.220  gate=1.015
+  epoch 9/50  CE=0.0487  sp=0.0000  ||out||_DP=0.246  ||out||_other=0.246  gate=1.017
+  epoch 10/50  CE=0.0885  sp=0.0000  ||out||_DP=0.272  ||out||_other=0.271  gate=1.019
+  epoch 11/50  CE=0.0645  sp=0.0000  ||out||_DP=0.298  ||out||_other=0.297  gate=1.021
+  epoch 12/50  CE=0.0881  sp=0.0000  ||out||_DP=0.325  ||out||_other=0.323  gate=1.023
+  epoch 13/50  CE=0.0970  sp=0.0000  ||out||_DP=0.352  ||out||_other=0.350  gate=1.025
+  epoch 14/50  CE=0.0647  sp=0.0000  ||out||_DP=0.380  ||out||_other=0.377  gate=1.028
+  epoch 15/50  CE=0.0622  sp=0.0000  ||out||_DP=0.408  ||out||_other=0.403  gate=1.030
+  epoch 16/50  CE=0.0673  sp=0.0000  ||out||_DP=0.434  ||out||_other=0.428  gate=1.032
+  epoch 17/50  CE=0.0668  sp=0.0000  ||out||_DP=0.460  ||out||_other=0.455  gate=1.035
+  epoch 18/50  CE=0.0868  sp=0.0000  ||out||_DP=0.488  ||out||_other=0.478  gate=1.037
+  epoch 19/50  CE=0.0668  sp=0.0000  ||out||_DP=0.512  ||out||_other=0.501  gate=1.040
+  epoch 20/50  CE=0.0985  sp=0.0000  ||out||_DP=0.539  ||out||_other=0.529  gate=1.042
+  epoch 21/50  CE=0.0738  sp=0.0000  ||out||_DP=0.564  ||out||_other=0.553  gate=1.045
+  epoch 22/50  CE=0.0671  sp=0.0000  ||out||_DP=0.595  ||out||_other=0.572  gate=1.048
+  epoch 23/50  CE=0.0623  sp=0.0000  ||out||_DP=0.616  ||out||_other=0.598  gate=1.050
+  epoch 24/50  CE=0.0573  sp=0.0000  ||out||_DP=0.636  ||out||_other=0.616  gate=1.053
+  epoch 25/50  CE=0.0453  sp=0.0000  ||out||_DP=0.648  ||out||_other=0.640  gate=1.056
+  epoch 26/50  CE=0.0547  sp=0.0000  ||out||_DP=0.662  ||out||_other=0.661  gate=1.058
+  epoch 27/50  CE=0.0960  sp=0.0000  ||out||_DP=0.681  ||out||_other=0.682  gate=1.061
+  epoch 28/50  CE=0.0767  sp=0.0000  ||out||_DP=0.698  ||out||_other=0.699  gate=1.064
+  epoch 29/50  CE=0.0800  sp=0.0000  ||out||_DP=0.718  ||out||_other=0.724  gate=1.066
+  epoch 30/50  CE=0.0757  sp=0.0000  ||out||_DP=0.725  ||out||_other=0.743  gate=1.069
+  epoch 31/50  CE=0.0599  sp=0.0000  ||out||_DP=0.735  ||out||_other=0.759  gate=1.072
+  epoch 32/50  CE=0.0739  sp=0.0000  ||out||_DP=0.745  ||out||_other=0.786  gate=1.076
+  epoch 33/50  CE=0.0587  sp=0.0000  ||out||_DP=0.773  ||out||_other=0.812  gate=1.079
+  epoch 34/50  CE=0.0888  sp=0.0000  ||out||_DP=0.785  ||out||_other=0.844  gate=1.082
+  epoch 35/50  CE=0.0735  sp=0.0000  ||out||_DP=0.819  ||out||_other=0.873  gate=1.085
+  epoch 36/50  CE=0.0649  sp=0.0000  ||out||_DP=0.821  ||out||_other=0.891  gate=1.088
+  epoch 37/50  CE=0.0798  sp=0.0000  ||out||_DP=0.836  ||out||_other=0.917  gate=1.091
+  epoch 38/50  CE=0.0722  sp=0.0000  ||out||_DP=0.859  ||out||_other=0.938  gate=1.094
+  epoch 39/50  CE=0.0527  sp=0.0000  ||out||_DP=0.868  ||out||_other=0.949  gate=1.097
+  epoch 40/50  CE=0.0634  sp=0.0000  ||out||_DP=0.896  ||out||_other=0.979  gate=1.100
+  epoch 41/50  CE=0.0667  sp=0.0000  ||out||_DP=0.916  ||out||_other=1.013  gate=1.103
+  epoch 42/50  CE=0.0733  sp=0.0000  ||out||_DP=0.937  ||out||_other=1.029  gate=1.107
+  epoch 43/50  CE=0.0517  sp=0.0000  ||out||_DP=0.941  ||out||_other=1.040  gate=1.110
+  epoch 44/50  CE=0.0575  sp=0.0000  ||out||_DP=0.994  ||out||_other=1.047  gate=1.113
+  epoch 45/50  CE=0.0548  sp=0.0000  ||out||_DP=1.030  ||out||_other=1.079  gate=1.116
+  epoch 46/50  CE=0.0527  sp=0.0000  ||out||_DP=1.031  ||out||_other=1.094  gate=1.119
+  epoch 47/50  CE=0.0635  sp=0.0000  ||out||_DP=1.054  ||out||_other=1.131  gate=1.122
+  epoch 48/50  CE=0.0406  sp=0.0000  ||out||_DP=1.050  ||out||_other=1.115  gate=1.125
+  epoch 49/50  CE=0.0403  sp=0.0000  ||out||_DP=1.069  ||out||_other=1.135  gate=1.128
+  epoch 50/50  CE=0.0581  sp=0.0000  ||out||_DP=1.121  ||out||_other=1.182  gate=1.131
+  done in 2.2s
+
+── With memory ──
+MEM/ffff:   0%|          | 0/150 [00:00<?, ?it/s]MEM/ffff:   1%|          | 1/150 [00:03<08:45,  3.53s/it]MEM/ffff:   1%|▏         | 2/150 [00:07<09:56,  4.03s/it]MEM/ffff:   2%|▏         | 3/150 [00:09<06:35,  2.69s/it]MEM/ffff:   3%|▎         | 4/150 [00:10<05:42,  2.34s/it]MEM/ffff:   3%|▎         | 5/150 [00:12<04:48,  1.99s/it]MEM/ffff:   4%|▍         | 6/150 [00:14<04:38,  1.94s/it]MEM/ffff:   5%|▍         | 7/150 [00:15<04:01,  1.69s/it]MEM/ffff:   5%|▌         | 8/150 [00:16<03:54,  1.65s/it]MEM/ffff:   6%|▌         | 9/150 [00:18<03:53,  1.66s/it]MEM/ffff:   7%|▋         | 10/150 [00:20<04:03,  1.74s/it]MEM/ffff:   7%|▋         | 11/150 [00:21<03:53,  1.68s/it]MEM/ffff:   8%|▊         | 12/150 [00:23<03:42,  1.61s/it]MEM/ffff:   9%|▊         | 13/150 [00:24<03:21,  1.47s/it]MEM/ffff:   9%|▉         | 14/150 [00:26<03:24,  1.50s/it]MEM/ffff:  10%|█         | 15/150 [00:29<04:24,  1.96s/it]MEM/ffff:  11%|█         | 16/150 [00:30<04:07,  1.84s/it]MEM/ffff:  11%|█▏        | 17/150 [00:32<04:04,  1.84s/it]MEM/ffff:  12%|█▏        | 18/150 [00:34<04:12,  1.92s/it]MEM/ffff:  13%|█▎        | 19/150 [00:35<03:37,  1.66s/it]MEM/ffff:  13%|█▎        | 20/150 [00:37<03:37,  1.68s/it]MEM/ffff:  14%|█▍        | 21/150 [00:39<03:39,  1.70s/it]MEM/ffff:  15%|█▍        | 22/150 [00:40<03:06,  1.46s/it]MEM/ffff:  15%|█▌        | 23/150 [00:41<03:11,  1.51s/it]MEM/ffff:  16%|█▌        | 24/150 [00:43<03:36,  1.72s/it]MEM/ffff:  17%|█▋        | 25/150 [00:47<04:46,  2.30s/it]MEM/ffff:  17%|█▋        | 26/150 [00:48<03:59,  1.93s/it]MEM/ffff:  18%|█▊        | 27/150 [00:49<03:20,  1.63s/it]MEM/ffff:  19%|█▊        | 28/150 [00:50<03:02,  1.50s/it]MEM/ffff:  19%|█▉        | 29/150 [00:53<03:54,  1.94s/it]MEM/ffff:  20%|██        | 30/150 [00:55<03:41,  1.85s/it]MEM/ffff:  21%|██        | 31/150 [00:56<03:28,  1.75s/it]MEM/ffff:  21%|██▏       | 32/150 [00:58<03:28,  1.76s/it]MEM/ffff:  22%|██▏       | 33/150 [00:59<03:05,  1.58s/it]MEM/ffff:  23%|██▎       | 34/150 [01:01<03:17,  1.70s/it]MEM/ffff:  23%|██▎       | 35/150 [01:03<03:26,  1.80s/it]MEM/ffff:  24%|██▍       | 36/150 [01:05<03:17,  1.73s/it]MEM/ffff:  25%|██▍       | 37/150 [01:07<03:18,  1.76s/it]MEM/ffff:  25%|██▌       | 38/150 [01:08<02:57,  1.58s/it]MEM/ffff:  26%|██▌       | 39/150 [01:09<02:40,  1.45s/it]MEM/ffff:  27%|██▋       | 40/150 [01:11<02:43,  1.48s/it]MEM/ffff:  27%|██▋       | 41/150 [01:12<02:52,  1.58s/it]MEM/ffff:  28%|██▊       | 42/150 [01:14<03:00,  1.67s/it]MEM/ffff:  29%|██▊       | 43/150 [01:15<02:40,  1.50s/it]MEM/ffff:  29%|██▉       | 44/150 [01:16<02:27,  1.39s/it]MEM/ffff:  30%|███       | 45/150 [01:18<02:31,  1.44s/it]MEM/ffff:  31%|███       | 46/150 [01:19<02:08,  1.24s/it]MEM/ffff:  31%|███▏      | 47/150 [01:21<02:39,  1.54s/it]MEM/ffff:  32%|███▏      | 48/150 [01:23<02:34,  1.52s/it]MEM/ffff:  33%|███▎      | 49/150 [01:26<03:36,  2.14s/it]MEM/ffff:  33%|███▎      | 50/150 [01:27<02:52,  1.73s/it]MEM/ffff:  34%|███▍      | 51/150 [01:28<02:46,  1.68s/it]MEM/ffff:  35%|███▍      | 52/150 [01:29<02:05,  1.29s/it]MEM/ffff:  35%|███▌      | 53/150 [01:30<02:00,  1.24s/it]MEM/ffff:  36%|███▌      | 54/150 [01:31<02:06,  1.32s/it]MEM/ffff:  37%|███▋      | 55/150 [01:33<02:13,  1.41s/it]MEM/ffff:  37%|███▋      | 56/150 [01:37<03:13,  2.06s/it]MEM/ffff:  38%|███▊      | 57/150 [01:38<02:56,  1.90s/it]MEM/ffff:  39%|███▊      | 58/150 [01:40<02:57,  1.93s/it]MEM/ffff:  39%|███▉      | 59/150 [01:41<02:34,  1.69s/it]MEM/ffff:  40%|████      | 60/150 [01:43<02:26,  1.62s/it]MEM/ffff:  41%|████      | 61/150 [01:44<02:14,  1.51s/it]MEM/ffff:  41%|████▏     | 62/150 [01:46<02:16,  1.55s/it]MEM/ffff:  42%|████▏     | 63/150 [01:47<02:14,  1.54s/it]MEM/ffff:  43%|████▎     | 64/150 [01:49<02:19,  1.62s/it]MEM/ffff:  43%|████▎     | 65/150 [01:51<02:18,  1.63s/it]MEM/ffff:  44%|████▍     | 66/150 [01:54<03:06,  2.22s/it]MEM/ffff:  45%|████▍     | 67/150 [01:55<02:29,  1.80s/it]MEM/ffff:  45%|████▌     | 68/150 [01:57<02:20,  1.71s/it]MEM/ffff:  46%|████▌     | 69/150 [01:59<02:41,  2.00s/it]MEM/ffff:  47%|████▋     | 70/150 [02:03<03:18,  2.48s/it]MEM/ffff:  47%|████▋     | 71/150 [02:06<03:21,  2.56s/it]MEM/ffff:  48%|████▊     | 72/150 [02:08<03:12,  2.46s/it]MEM/ffff:  49%|████▊     | 73/150 [02:09<02:39,  2.07s/it]MEM/ffff:  49%|████▉     | 74/150 [02:10<02:22,  1.88s/it]MEM/ffff:  50%|█████     | 75/150 [02:12<02:03,  1.65s/it]MEM/ffff:  51%|█████     | 76/150 [02:13<01:49,  1.48s/it]MEM/ffff:  51%|█████▏    | 77/150 [02:14<01:46,  1.46s/it]MEM/ffff:  52%|█████▏    | 78/150 [02:16<01:54,  1.59s/it]MEM/ffff:  53%|█████▎    | 79/150 [02:17<01:49,  1.54s/it]MEM/ffff:  53%|█████▎    | 80/150 [02:18<01:31,  1.31s/it]MEM/ffff:  54%|█████▍    | 81/150 [02:19<01:31,  1.33s/it]MEM/ffff:  55%|█████▍    | 82/150 [02:21<01:35,  1.40s/it]MEM/ffff:  55%|█████▌    | 83/150 [02:22<01:28,  1.32s/it]MEM/ffff:  56%|█████▌    | 84/150 [02:23<01:23,  1.26s/it]MEM/ffff:  57%|█████▋    | 85/150 [02:25<01:28,  1.36s/it]MEM/ffff:  57%|█████▋    | 86/150 [02:25<01:12,  1.13s/it]MEM/ffff:  58%|█████▊    | 87/150 [02:26<01:06,  1.06s/it]MEM/ffff:  59%|█████▊    | 88/150 [02:28<01:15,  1.22s/it]MEM/ffff:  59%|█████▉    | 89/150 [02:29<01:13,  1.21s/it]MEM/ffff:  60%|██████    | 90/150 [02:31<01:26,  1.45s/it]MEM/ffff:  61%|██████    | 91/150 [02:32<01:20,  1.37s/it]MEM/ffff:  61%|██████▏   | 92/150 [02:34<01:29,  1.54s/it]MEM/ffff:  62%|██████▏   | 93/150 [02:35<01:21,  1.43s/it]MEM/ffff:  63%|██████▎   | 94/150 [02:37<01:20,  1.45s/it]MEM/ffff:  63%|██████▎   | 95/150 [02:38<01:10,  1.28s/it]MEM/ffff:  64%|██████▍   | 96/150 [02:40<01:20,  1.49s/it]MEM/ffff:  65%|██████▍   | 97/150 [02:43<01:52,  2.12s/it]MEM/ffff:  65%|██████▌   | 98/150 [02:45<01:38,  1.90s/it]MEM/ffff:  66%|██████▌   | 99/150 [02:47<01:40,  1.98s/it]MEM/ffff:  67%|██████▋   | 100/150 [02:49<01:38,  1.97s/it]MEM/ffff:  67%|██████▋   | 101/150 [02:49<01:16,  1.56s/it]MEM/ffff:  68%|██████▊   | 102/150 [02:53<01:44,  2.17s/it]MEM/ffff:  69%|██████▊   | 103/150 [02:55<01:36,  2.06s/it]MEM/ffff:  69%|██████▉   | 104/150 [02:56<01:18,  1.71s/it]MEM/ffff:  70%|███████   | 105/150 [02:59<01:36,  2.13s/it]MEM/ffff:  71%|███████   | 106/150 [03:00<01:20,  1.83s/it]MEM/ffff:  71%|███████▏  | 107/150 [03:02<01:17,  1.81s/it]MEM/ffff:  72%|███████▏  | 108/150 [03:03<01:06,  1.59s/it]MEM/ffff:  73%|███████▎  | 109/150 [03:04<01:05,  1.59s/it]MEM/ffff:  73%|███████▎  | 110/150 [03:06<01:02,  1.57s/it]MEM/ffff:  74%|███████▍  | 111/150 [03:08<01:05,  1.68s/it]MEM/ffff:  75%|███████▍  | 112/150 [03:09<00:58,  1.54s/it]MEM/ffff:  75%|███████▌  | 113/150 [03:13<01:20,  2.16s/it]MEM/ffff:  76%|███████▌  | 114/150 [03:15<01:18,  2.19s/it]MEM/ffff:  77%|███████▋  | 115/150 [03:16<01:08,  1.96s/it]MEM/ffff:  77%|███████▋  | 116/150 [03:19<01:10,  2.07s/it]MEM/ffff:  78%|███████▊  | 117/150 [03:20<01:02,  1.90s/it]MEM/ffff:  79%|███████▊  | 118/150 [03:21<00:52,  1.63s/it]MEM/ffff:  79%|███████▉  | 119/150 [03:22<00:45,  1.47s/it]MEM/ffff:  80%|████████  | 120/150 [03:23<00:41,  1.37s/it]MEM/ffff:  81%|████████  | 121/150 [03:25<00:42,  1.45s/it]MEM/ffff:  81%|████████▏ | 122/150 [03:27<00:40,  1.45s/it]MEM/ffff:  82%|████████▏ | 123/150 [03:28<00:39,  1.48s/it]MEM/ffff:  83%|████████▎ | 124/150 [03:29<00:33,  1.29s/it]MEM/ffff:  83%|████████▎ | 125/150 [03:30<00:33,  1.32s/it]MEM/ffff:  84%|████████▍ | 126/150 [03:32<00:33,  1.38s/it]MEM/ffff:  85%|████████▍ | 127/150 [03:34<00:35,  1.54s/it]MEM/ffff:  85%|████████▌ | 128/150 [03:35<00:31,  1.41s/it]MEM/ffff:  86%|████████▌ | 129/150 [03:37<00:32,  1.57s/it]MEM/ffff:  87%|████████▋ | 130/150 [03:38<00:28,  1.45s/it]MEM/ffff:  87%|████████▋ | 131/150 [03:39<00:26,  1.40s/it]MEM/ffff:  88%|████████▊ | 132/150 [03:43<00:37,  2.07s/it]MEM/ffff:  89%|████████▊ | 133/150 [03:44<00:29,  1.76s/it]MEM/ffff:  89%|████████▉ | 134/150 [03:45<00:26,  1.67s/it]
