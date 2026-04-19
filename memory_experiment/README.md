@@ -227,6 +227,7 @@ End-to-end (only meaningful on `ffff` val):
 | `outputs/E1-E4_results.{md,txt}` | Pilot 2×2 comparison table. |
 | `outputs/data_efficiency_results.txt` | 18-run data-efficiency sweep result. |
 | `outputs/final_results.md` | Written by `summarize_sweep.py` after the full sweep. |
+| `outputs/BEST_MODEL.md` | Summary of the best recipe from the overnight sweep: config, hyperparam explanations, absolute numbers vs 2nd-best and E4. |
 | `old_scripts/` | Archived earlier sweep scripts superseded by `run_all_phases.sh`. |
 | `logs/` | All stdout logs + archived `wandb/`. |
 | `wandb/` | Current W&B run dir (runs launched via scripts go into `logs/wandb/` via `WANDB_DIR`). |
