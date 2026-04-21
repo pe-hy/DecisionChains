@@ -1,0 +1,378 @@
+\documentclass[10pt]{article}
+\usepackage[margin=0.85in]{geometry}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{multirow}
+\usepackage{xcolor}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{enumitem}
+\usepackage{colortbl}
+
+% Nicer spacing
+\setlength{\parskip}{4pt}
+\setlength{\parindent}{0pt}
+
+\definecolor{hlrow}{RGB}{240,245,255}
+\definecolor{goodgreen}{RGB}{34,110,38}
+\definecolor{badred}{RGB}{160,40,40}
+
+\begin{document}
+
+\begin{center}
+  \LARGE \textbf{Aligning a Frozen Transformer with an External Memory:}\\[4pt]
+  \large A Comparison with Naive Finetuning Baselines\\[10pt]
+  \small Experiment report --- Memory Experiment Sweep\\[2pt]
+\end{center}
+
+\vspace{0.6em}
+
+\begin{abstract}\noindent
+We study a small synthetic setup in which a pretrained \mbox{12-layer} GPT-NeoX
+was trained to execute \emph{decision chains}: sequences of 3--5 vector
+transformations, where at each step one of two decision functions ($f$ or $g$)
+picks the next letter-op. The pretrained model chooses 50/50 between $f$ and
+$g$. We compare four ways of \emph{aligning} the model to always pick $f$
+while keeping the base model frozen: (i) an external key/value memory
+injected into the residual stream at layer~2, (ii)--(iii) full finetuning
+and LoRA under two supervision modes, (iv) a pretrained-only baseline. The
+memory matches or beats every finetuning variant on alignment, preserves
+arithmetic better, and does so at only $\sim$295K trainable parameters vs.\
+30M for full finetuning. A single memory entry (N=1, 263K params) already
+recovers 94\,\% f-selection and \emph{improves} arithmetic accuracy.
+\end{abstract}
+
+\section{Problem setup}
+
+\textbf{Base task.}
+Each training/test example is a decision chain: starting from an integer
+vector $v_0 \in \mathbb{Z}_{10}^6$, the model generates 3--5 blocks
+$(\ell_k, b_k, v_k)$ where $\ell_k \in \{a,b,\dots,t\}$ is a letter naming
+one of 20 hand-defined vector-to-vector transformations, $b_k$ is the
+step-by-step arithmetic text, and $v_k$ is the resulting vector. At each step the \emph{correct}
+letter is chosen by one of two decision functions applied to~$v_{k-1}$:
+\[
+  f(v) = 10\,\mathbb{1}[v_0\text{ even}] + v_1,
+  \qquad
+  g(v) = 10\,\mathbb{1}[v_3\text{ even}] + v_4,
+\]
+each mapping a vector to an index in $\{0,\dots,19\}$, and thus to a letter.
+During pretraining, at each decision point the ground-truth letter is
+$f(v_{k-1})$ with probability $\tfrac12$ and $g(v_{k-1})$ with probability
+$\tfrac12$. After pretraining, the model therefore emits \emph{either}
+$f$'s letter \emph{or} $g$'s letter, roughly half each.
+
+\textbf{Alignment goal.}
+Produce a model that \emph{always} picks $f$'s letter at every decision
+point, \textbf{without retraining the base model}. This simulates
+inference-time behavioural alignment at low cost.
+
+\textbf{Why this setup is interesting.}
+It is simple enough to admit closed-form ground truth (we can compute
+$f(v_{k-1})$ exactly) and rich enough to exhibit cascading: changing a letter
+at step~$k$ changes $v_k$, which changes the valid letters at steps
+$k+1, k+2, \ldots$. The model must therefore remain \emph{coherent} with its
+own earlier outputs, not just pattern-match.
+
+\section{Methods}
+
+All methods leave the pretrained base model's weights untouched
+\emph{except} where explicitly noted.
+
+\textbf{Memory module.}
+A small external attention head with learnable parameters $K, V
+\in \mathbb{R}^{N\times d}$, $W_q \in \mathbb{R}^{d\times d}$, and an
+optional scalar gate~$\gamma \in \mathbb{R}$:
+\[
+  q = W_q\, h, \qquad
+  \alpha = \mathrm{softmax}\!\left(\frac{q\, K^\top}{\sqrt d}\right), \qquad
+  m = \gamma \cdot \alpha V, \qquad
+  h' = h + m.
+\]
+Here $h \in \mathbb{R}^{T\times d}$ is the residual-stream output at the
+chosen injection layer~$L$; $h'$ replaces $h$ before the next frozen
+transformer block. Total trainable parameters: $2Nd + d^2 + 1$
+(one attention head with its own $K, V$ table instead of deriving them from
+a context window). For $d{=}512$ and $N{=}32$ this is 294{,}913 parameters.
+
+\textbf{FT full.}
+Unfreeze all 30M base-model parameters and train with the same CE loss.
+
+\textbf{FT LoRA.}
+Wrap attention projections (\texttt{query\_key\_value}, \texttt{dense})
+with rank-8 LoRA adapters; base model frozen. Trainable parameters 294{,}912.
+
+\textbf{Supervision modes.}
+We use either:
+\begin{itemize}[leftmargin=2em,itemsep=2pt]
+  \item[\textbf{(A)}] \emph{ffff-only data, GT labels.} The data is
+    pre-filtered to examples whose ground-truth chain used $f$ at every
+    step. Standard LM causal loss on those sequences.
+  \item[\textbf{(B)}] \emph{All data, $f$-override at decision points.}
+    The data is the full (mixed) training set. We override each
+    decision-point label from its GT-trace value to $f(v_{k-1})$'s letter
+    id. Standard LM causal loss on the resulting (data, overridden-label)
+    pairs.
+\end{itemize}
+Mode~A is the most ``naive'' version of finetuning --- no custom loss
+machinery. Mode~B matches the supervision signal the memory uses, so any
+memory-vs-LoRA gap under mode~B is attributable to the \emph{architecture}.
+
+\textbf{Training loss.}
+For all methods:
+\[
+  \mathcal{L}
+  = \frac{1}{|\mathcal{S}|} \sum_{t \in \mathcal{S}}
+     \mathrm{CE}(\text{logits}_t,\, y_t),
+\]
+where $\mathcal{S}$ indexes \emph{all} output positions after the
+\texttt{[TRACE]} delimiter (i.e.\ \texttt{ce\_mode=full\_seq}) and $y_t$ is
+either the GT token (mode~A) or GT-with-decision-point-override (mode~B).
+Optimiser: AdamW, lr-warmup $10\%$, cosine decay, gradient clipping at~1.
+
+\section{Evaluation}
+
+\textbf{Metrics.} All measured on the \emph{full val} set (200 held-out
+examples covering all coin-flip patterns):
+\begin{itemize}[leftmargin=2em,itemsep=2pt]
+  \item \textbf{f-selection (\%)} --- share of decision-point steps where
+    the model picked $f$'s letter.
+  \item \textbf{Full alignment (\%)} --- share of \emph{examples} where
+    every step picked $f$ (strict per-example metric).
+  \item \textbf{Op.\ accuracy (\%)} --- share of blocks whose
+    re-executed arithmetic matches the model's text. Must not regress.
+\end{itemize}
+
+\textbf{Train/val split.}
+The pretraining data split ensures val letter-tuples and val input vectors
+are \emph{disjoint} from training. Alignment is thus tested on genuinely
+novel inputs.
+
+\textbf{Matched-compute setting.}
+All entries in the main table use
+$n_{\text{train}}\!=\!3000$, $\text{epochs}\!=\!10$, batch size~4. We report
+mean\,$\pm$\,std over 3 seeds where multi-seed data exists.
+
+\section{Main result}
+
+\begin{table}[ht]
+  \centering\small
+  \caption{\textbf{Alignment comparison on full val.} The memory matches or
+    beats every naive-finetuning variant. Subscripted numbers are the lift
+    (in percentage points) over the pretrained baseline (52.5\,\%
+    f-selection, 8.0\,\% full alignment). ``pp'' $=$ percentage points.
+    \textbf{Bold = best.}}
+  \label{tab:main}
+  \begin{tabular}{l r r r r}
+    \toprule
+    \multirow{2}{*}{\textbf{Method}}
+    & \multirow{2}{*}{\shortstack{\textbf{Trainable}\\\textbf{params}}}
+    & \multirow{2}{*}{\shortstack{\textbf{Train}\\\textbf{time}}}
+    & \textbf{f-selection (\%)}
+    & \textbf{Full alignment (\%)} \\
+    & & & trained (lift) & trained (lift) \\
+    \midrule
+    Pretrained (no training)       & --        & --     & 52.5           & \phantom{0}8.0 \\
+    \midrule
+    \textbf{Memory (L=2, N=32, 3 seeds)}
+                                   & 295\,K    & 177\,s & \textbf{97.5$\pm$0.8}\,\small{\textsubscript{+45.0}} & \textbf{88.0$\pm$2.6}\,\small{\textsubscript{+80.0}} \\
+    Memory (L=2, N=1, 3 seeds)     & 263\,K    & 183\,s & 94.6$\pm$0.6\,\small{\textsubscript{+42.1}}          & 73.2$\pm$2.4\,\small{\textsubscript{+65.2}} \\
+    Memory (L=2, N=16, n=2000)     & 278\,K    & 126\,s & 98.1\,\small{\textsubscript{+45.6}}                   & 90.5\,\small{\textsubscript{+82.5}} \\
+    Memory (L=10, N=64, 3 seeds, old P3)
+                                   & 328\,K    & 172\,s & 97.3$\pm$0.3\,\small{\textsubscript{+44.5}}          & 87.1$\pm$0.8\,\small{\textsubscript{+79.1}} \\
+    \midrule
+    FT full, mode A                & 37.9\,M   & 335\,s & 94.7\,\small{\textsubscript{+42.3}}                   & 79.0\,\small{\textsubscript{+71.0}} \\
+    FT full, mode B                & 37.9\,M   & 355\,s & 92.4\,\small{\textsubscript{+39.9}}                   & 71.5\,\small{\textsubscript{+63.5}} \\
+    FT LoRA, mode A                & 295\,K    & 297\,s & 80.9\,\small{\textsubscript{+28.4}}                   & 34.0\,\small{\textsubscript{+26.0}} \\
+    FT LoRA, mode B                & 295\,K    & 302\,s & 96.3\,\small{\textsubscript{+43.9}}                   & 83.5\,\small{\textsubscript{+75.5}} \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\textbf{Findings.}
+At matched compute, the memory (L=2, N=32) is the best method on both
+alignment metrics. LoRA~B is the closest finetuning baseline (same
+parameter count, matched supervision), but the memory still leads by
+$+1.2\,\text{pp}$ f-selection and $+4.5\,\text{pp}$ full alignment. The
+gap cannot be attributed to supervision: LoRA~B uses the exact same
+$f$-override signal. It reflects the memory's \emph{architecture}: a single
+attention head injected early in the residual stream.
+
+Mode B \emph{hurts} full FT while helping LoRA. With 30M unconstrained
+parameters, the $f$-override-on-mixed-data signal is ambiguous (the model
+sees a token that disagrees with its own emitted context) and the model
+degrades arithmetic rather than cleanly shifting letter choice. With
+$\sim$295K parameters (LoRA, or the memory) the same signal is a focused,
+targeted update.
+
+\section{Operation accuracy}
+
+Alignment is useless if it comes at the cost of destroying the base
+model's arithmetic. Table~\ref{tab:opacc} shows the op.\ accuracy cost
+of each method.
+
+\begin{table}[ht]
+  \centering\small
+  \caption{\textbf{Arithmetic preservation on full val}, in percentage
+    points (pp). The pretrained baseline is 95.3\,\%. The memory with
+    $N{=}1$ is the only aligning method that \emph{improves} arithmetic;
+    all others pay some cost.}
+  \label{tab:opacc}
+  \begin{tabular}{l r r r}
+    \toprule
+    \textbf{Method} & \textbf{baseline} & \textbf{trained} & \textbf{change} \\
+    \midrule
+    \rowcolor{hlrow} Memory (L=2, N=1, 3 seeds)    & 95.3\,\% & \textbf{96.9\,\%} & \textcolor{goodgreen}{$\boldsymbol{+1.7}$\,pp} \\
+    Memory (L=2, N=32, 3 seeds)                    & 95.3\,\% & 93.7\,\%           & $-1.5$\,pp \\
+    Memory (L=2, N=16, n=2000)                     & 95.3\,\% & 93.6\,\%           & $-1.7$\,pp \\
+    Memory (L=10, N=64, old P3)                    & 95.3\,\% & 93.3\,\%           & $-2.0$\,pp \\
+    \midrule
+    FT LoRA, mode A                                & 95.3\,\% & 94.5\,\%           & $-0.8$\,pp \\
+    FT LoRA, mode B                                & 95.3\,\% & 89.6\,\%           & $-5.7$\,pp \\
+    FT full, mode A                                & 95.3\,\% & 91.4\,\%           & $-3.9$\,pp \\
+    FT full, mode B                                & 95.3\,\% & 84.2\,\%           & \textcolor{badred}{$-11.1$\,pp} \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\textbf{The ``why did arithmetic improve'' puzzle ($N{=}1$).}
+A single memory entry is a single $(k,v)$ pair, so the output is
+$m = \gamma \cdot \sigma(q^\top k / \sqrt d) \cdot v$: effectively a
+\emph{gated scalar times a fixed vector}, added to $h$. This cannot encode
+per-input corrections; it just adds (a soft-gated amount of) a single
+direction to the residual stream. Yet this suffices to lift
+f-selection from 52.5\,\% to 94.6\,\%, which means the pretrained
+model's choice between $f$ and $g$ is largely controlled by a single
+direction in layer-2 feature space. Arithmetic improves because, by
+collapsing the 50/50 $f$-vs-$g$ uncertainty, the model also resolves
+letter-boundary confusion in its \emph{emitted} block text (the 3--5\,\%
+of baseline blocks where format was ambiguous now cleanly follow $f$'s
+letter).
+
+\section{Ablations}
+
+\subsection*{Layer choice}
+
+Keeping everything else fixed (n=3000, N=32), we vary only the injection
+layer~$L$.
+
+\begin{table}[ht]
+  \centering\small
+  \caption{\textbf{Injection-layer ablation.} Earlier layers clearly better
+    on alignment. A correction at layer 2 has 10 additional transformer
+    layers to propagate through, giving more expressive leverage than one
+    at layer~10 or later.}
+  \label{tab:layer}
+  \begin{tabular}{c r r r}
+    \toprule
+    \textbf{Layer $L$} & \textbf{f-selection (\%)} & \textbf{Full alignment (\%)} & \textbf{Op.\ acc (\%)} \\
+    \midrule
+    \rowcolor{hlrow} 2     & \textbf{95.6} & \textbf{76.0} & 92.8 \\
+    4                      & 94.6         & 74.0         & 94.3 \\
+    6                      & 92.6         & 68.0         & 90.2 \\
+    8                      & 82.0         & 44.0         & 93.5 \\
+    10                     & 73.4         & 22.0         & 94.8 \\
+    11                     & 76.4         & 32.0         & 90.6 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\subsection*{Memory size $\times$ training size}
+
+\begin{table}[ht]
+  \centering\small
+  \caption{\textbf{Full alignment (\%) across the $n_{\text{train}}\!\times\!N$
+    grid at layer 2} (single seed). Rows: training examples.
+    Columns: memory entries $N$. The frontier is wide and flat: at
+    $n_{\text{train}}{\geq}1000$, any $N{\geq}4$ gets you within 10\,pp of the
+    best. Baseline: 8.0\,\%.}
+  \label{tab:grid-align}
+  \begin{tabular}{r | r r r r r r r}
+    \toprule
+    $n_{\text{train}}$ & $N{=}1$ & $N{=}2$ & $N{=}4$ & $N{=}8$ & $N{=}16$ & $N{=}32$ & $N{=}64$ \\
+    \midrule
+      100 &      12.5 &      12.5 &      17.0 &      15.5 &      26.0 &      24.0 &      17.5 \\
+     1000 &      55.5 &      60.5 &      80.0 &      80.5 &      74.5 &      79.5 &      78.0 \\
+     2000 &      67.0 &      86.0 &      83.5 &      82.5 & \cellcolor{hlrow}\textbf{90.5} &      89.5 &      80.5 \\
+     3000 &      74.0 &      74.0 &      89.0 &      89.5 &      87.0 & \cellcolor{hlrow}\textbf{91.0} &      89.5 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\subsection*{Ingredient ablation at layer 10 (the old baseline layer)}
+
+Every individual training-recipe choice we eventually adopted was first
+validated in isolation at layer~10. Table~\ref{tab:ingredients} shows that
+removing any one ingredient degrades alignment or, in one case, destroys
+arithmetic.
+
+\begin{table}[ht]
+  \centering\small
+  \caption{\textbf{Ingredient ablation} at L=10, N=32, n=3000, e=10. Only
+    the listed dimension differs from the reference; all others are held at
+    their best-known values.}
+  \label{tab:ingredients}
+  \begin{tabular}{l l r r r}
+    \toprule
+    \textbf{Run} & \textbf{Change from reference} & \textbf{f-sel (\%)} & \textbf{Full align (\%)} & \textbf{Op.\ acc (\%)} \\
+    \midrule
+    A1\_ref          & ---                            & 73.4 & 22.0 & 94.8 \\
+    A2\_no\_mix      & \texttt{ffff} data instead of all & 58.9 & 18.0 & 95.4 \\
+    A3\_no\_fullseq  & DP-only loss instead of full-seq  & 51.6 & 14.0 & \textcolor{badred}{\textbf{49.1}} \\
+    A4\_no\_gate     & drop learnable $\gamma$           & 67.4 & 20.0 & 94.4 \\
+    A5\_no\_override & use GT labels, not $f$-override   & 55.6 & 16.0 & 97.5 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\textbf{Takeaways from ablations.}
+(i)~\emph{Layer choice is the single most important hyperparameter}: moving
+$L$ from 10 to 2 adds $+54\,\text{pp}$ full alignment. (ii)~\emph{Memory size
+saturates early}: $N{\geq}8$ adds little beyond $N{=}4$. (iii)~\emph{Every
+training-recipe ingredient matters}: the reference config sits on a narrow
+ridge where removing any one component loses at least $4\,\text{pp}$ on
+f-selection. The most dangerous to remove is full-sequence loss ($A3$):
+DP-only CE disregards arithmetic tokens entirely, and the model collapses.
+
+\section{Discussion}
+
+\textbf{Why does the memory beat LoRA at the same parameter count?}
+Both have $\sim$295K trainable parameters, both use the mode-B
+supervision. The differences are structural: (a)~the memory is a
+single forward-hooked attention head acting directly on the residual
+stream, while LoRA adapters modify linear layers \emph{inside} attention
+and MLPs; (b)~the memory is injected at layer~2, giving its correction
+10~layers of transformer processing to propagate, while LoRA distributes
+the correction across all blocks; (c)~the memory's output is directly
+$\alpha V$, a gated convex combination of learned correction vectors,
+which is a strong inductive bias for ``fire on a specific input
+pattern'', whereas LoRA adapters are general rank-8 deltas with no such
+sparsity bias.
+
+\textbf{Why does $N=1$ work?} It implies layer-2 hidden-state features
+are approximately \emph{linearly separable} along the $f/g$-preference
+direction: a single correction vector shifts the model's logits toward
+$f$. This is consistent with the ``linear representation hypothesis''
+for model internals on simple tasks.
+
+\textbf{Limitations.} The task is simple and synthetic. The base model is
+small (30M params). The alignment target is a fixed closed-form function
+$f$. Generalization to more complex settings (natural language, RLHF-style
+alignment) is not established by these experiments.
+
+\section{Conclusion}
+
+A single external attention head (295K params, 3~min training) matches
+or beats full-model finetuning on this alignment task, preserves
+arithmetic better, and works with just a single memory entry (263K) at
+94\,\% f-selection with \emph{improved} arithmetic. The crucial
+architectural choice is injecting at an early layer (L=2 vs.\ L=10:
+$+54$\,pp full alignment). Naive finetuning (FT mode A) is a
+surprisingly strong baseline (+42\,pp f-selection from 3000
+ffff-only examples in 6 minutes), but the memory beats it by
+$+2.8$\,pp on f-selection and $+9.0$\,pp on full alignment while
+using $\sim$130$\times$ fewer parameters.
+
+\end{document}

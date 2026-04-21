@@ -1,5 +1,18 @@
-# Large data / model outputs
-outputs/
+# Large data / model outputs: ignore bulky subfolders in any outputs/ dir
+# (use **/ to anchor at any depth), and any common heavy file formats.
+# Writeups (*.md, *.tex, *.pdf, *.txt) inside outputs/ are kept — they are
+# the only files explicitly added to git from outputs/.
+**/outputs/experiments/
+**/outputs/data/
+**/outputs/temp/
+**/outputs/tokenizer/
+**/outputs/eval_results/
+**/outputs/checkpoints/
+**/outputs/output/
+**/outputs/*.json
+**/outputs/*.npz
+**/outputs/*.pt
+**/outputs/*.bin
 wandb/
 
 # Checkpoints and temp
