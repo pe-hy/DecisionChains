@@ -1,0 +1,563 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Memory-Experiment Runs</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --fg: #e7e9ee;
+    --muted: #8c94a3;
+    --row-alt: #161923;
+    --border: #262b39;
+    --accent: #5bc0eb;
+    --good: #7dd87d;
+    --bad: #ff7a7a;
+    --cell-pad: 4px 8px;
+  }
+  html, body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif;
+    margin: 0; padding: 0;
+  }
+  body { padding: 18px 24px 60px; }
+
+  h1 { font-size: 16px; margin: 0 0 4px; letter-spacing: 0.02em; }
+  .subtitle { color: var(--muted); font-size: 12px; margin-bottom: 14px; }
+
+  .controls {
+    display: flex; gap: 10px; flex-wrap: wrap; align-items: center;
+    margin-bottom: 10px;
+    padding: 8px 10px; background: var(--row-alt);
+    border: 1px solid var(--border); border-radius: 4px;
+  }
+  .controls input, .controls select {
+    background: var(--bg); color: var(--fg);
+    border: 1px solid var(--border); border-radius: 3px;
+    padding: 3px 8px; font-size: 12px;
+    font-family: inherit;
+  }
+  .controls label {
+    font-size: 11px; color: var(--muted);
+    display: flex; align-items: center; gap: 6px;
+  }
+  .controls .count { margin-left: auto; color: var(--muted); font-size: 11px; }
+
+  table {
+    width: 100%; border-collapse: collapse;
+    font-size: 11.5px; font-variant-numeric: tabular-nums;
+  }
+  th, td {
+    padding: var(--cell-pad);
+    border-bottom: 1px solid var(--border);
+    text-align: right; white-space: nowrap;
+  }
+  th {
+    position: sticky; top: 0; background: var(--bg);
+    font-weight: 600; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 0.04em; font-size: 10px;
+    cursor: pointer; user-select: none;
+    border-bottom: 1px solid var(--border);
+  }
+  th.sorted-asc::after  { content: " ▲"; color: var(--accent); }
+  th.sorted-desc::after { content: " ▼"; color: var(--accent); }
+  th[data-tip]:hover { color: var(--accent); }
+  td.name, th.name { text-align: left; font-family: "SF Mono", Menlo, Consolas, monospace; }
+  td.cfg, th.cfg { text-align: left; }
+  tr:nth-child(even) { background: var(--row-alt); }
+  tr:hover { background: #1e2332; }
+
+  /* Delta cells: shade background by magnitude, color by sign. */
+  .delta { position: relative; }
+  .delta .sign-pos { color: var(--good); }
+  .delta .sign-neg { color: var(--bad); }
+  .delta .mag { display: inline-block; min-width: 56px; }
+
+  /* Tooltip */
+  [data-tip] { position: relative; }
+  [data-tip]:hover::after {
+    content: attr(data-tip);
+    position: absolute; z-index: 10;
+    bottom: calc(100% + 4px); left: 50%;
+    transform: translateX(-50%);
+    background: #1e2230;
+    color: var(--fg); font-weight: 400;
+    font-size: 11px; line-height: 1.35;
+    padding: 6px 8px; border-radius: 4px;
+    border: 1px solid var(--border);
+    white-space: normal; text-transform: none; letter-spacing: normal;
+    width: 360px; text-align: left;
+    pointer-events: none;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+  }
+
+  .pill {
+    display: inline-block; padding: 1px 5px; border-radius: 3px;
+    font-size: 10px; background: #262b39; color: var(--muted);
+    margin-right: 3px;
+  }
+  .pill.on { background: #2d4a5e; color: var(--accent); }
+
+  footer { color: var(--muted); font-size: 10px; margin-top: 14px; }
+  a { color: var(--accent); }
+  code { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 11px; color: var(--muted); }
+
+  /* Tabs */
+  .tabs {
+    display: flex; gap: 2px; margin-bottom: 10px;
+    border-bottom: 1px solid var(--border);
+  }
+  .tabs button {
+    background: transparent; color: var(--muted);
+    border: none; border-bottom: 2px solid transparent;
+    padding: 8px 14px; cursor: pointer;
+    font-family: inherit; font-size: 12px; letter-spacing: 0.03em;
+  }
+  .tabs button.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .tabs button:hover { color: var(--fg); }
+
+  /* Guide view */
+  .guide {
+    max-width: 960px; line-height: 1.55; font-size: 13px; color: var(--fg);
+  }
+  .guide h2 {
+    font-size: 14px; color: var(--accent); margin: 22px 0 4px;
+    letter-spacing: 0.04em; text-transform: uppercase;
+  }
+  .guide h3 {
+    font-size: 13px; color: var(--fg); margin: 14px 0 2px;
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+  }
+  .guide p { margin: 4px 0 10px; color: var(--fg); }
+  .guide p.muted { color: var(--muted); font-size: 12px; }
+  .guide .ex {
+    background: var(--row-alt); border: 1px solid var(--border);
+    border-radius: 4px; padding: 6px 10px; font-size: 11.5px;
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+    color: var(--muted); margin: 4px 0 10px; display: block;
+    white-space: pre-wrap;
+  }
+  .guide ul { margin: 4px 0 10px 0; padding-left: 20px; color: var(--fg); }
+  .guide li { margin: 2px 0; }
+  .guide .kv { color: var(--muted); }
+  .guide .kv b { color: var(--fg); font-weight: 600; }
+  .guide a.filter-link {
+    color: var(--accent); text-decoration: none;
+    border-bottom: 1px dotted var(--accent); cursor: pointer;
+  }
+  .guide a.filter-link:hover { color: var(--fg); border-bottom-color: var(--fg); }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+  <h1>Memory Experiment</h1>
+  <div class="subtitle">
+    <span id="meta">loading…</span>
+    ·
+    Regenerate data: <code>python visualization/build_data.py</code>
+  </div>
+
+  <div class="tabs">
+    <button id="tab-runs" class="active">Runs table</button>
+    <button id="tab-guide">Guide — what do these names mean?</button>
+  </div>
+
+  <div id="view-runs">
+  <div class="controls">
+    <label>Search
+      <input id="q" type="text" placeholder="name / group / layer …" size="30">
+    </label>
+    <label>Group
+      <select id="group"><option value="">(any)</option></select>
+    </label>
+    <label>Layer
+      <select id="layer"><option value="">(any)</option></select>
+    </label>
+    <label>Data
+      <select id="data"><option value="">(any)</option></select>
+    </label>
+    <label>CE mode
+      <select id="ce"><option value="">(any)</option></select>
+    </label>
+    <label>DP target
+      <select id="dp"><option value="">(any)</option></select>
+    </label>
+    <span class="count" id="count"></span>
+  </div>
+
+  <table id="tbl">
+    <thead><tr id="head"></tr></thead>
+    <tbody id="body"></tbody>
+  </table>
+
+  <footer>
+    Data loaded from <code>data.js</code> — refresh the page after running
+    <code>build_data.py</code> to pick up new experiments.
+  </footer>
+  </div>
+
+  <div id="view-guide" class="hidden">
+  <div class="guide">
+    <p class="muted">Every run's name encodes its role in a sweep. This guide decodes the naming so you know what's
+      what. Click any <a class="filter-link">link like this</a> to jump to the runs table, pre-filtered.</p>
+
+    <h2>The alignment goal</h2>
+    <p>The base model is a frozen 12-layer 512-dim GPT-NeoX trained on decision-chain traces. At each
+      chain step, two decision functions (<code>f</code> and <code>g</code>) each pick one of 20 letters
+      given the current vector. Pretrained, the model flips a 50/50 coin. <b>Goal:</b> steer it to always
+      pick <code>f</code>'s letter, using a tiny trained memory hooked into the residual stream. The
+      base model stays entirely frozen.</p>
+
+    <h2>What the names tell you</h2>
+    <p>Every run shows these ingredients in its name:
+      <span class="kv"><b>prefix</b> = which sweep</span>,
+      <span class="kv"><b>n</b> = training examples</span>,
+      <span class="kv"><b>e / ep</b> = epochs</span>,
+      <span class="kv"><b>N</b> = memory entries</span>,
+      <span class="kv"><b>L</b> = injection layer</span>,
+      <span class="kv"><b>s</b> = seed</span>.
+      Any flag not in the name is at the <em>default for that sweep</em> — click the row in the table to see the full config.</p>
+
+    <h2>The run families, in chronological order</h2>
+
+    <h3>E1 – E4 &nbsp;— the pilot 2×2 &nbsp; <a class="filter-link" data-q="E1_">[E1]</a> &nbsp; <a class="filter-link" data-q="E2_">[E2]</a> &nbsp; <a class="filter-link" data-q="E3_">[E3]</a> &nbsp; <a class="filter-link" data-q="E4_">[E4]</a></h3>
+    <p>Our first experiment: does mixed data and full-sequence CE matter, vs. f-only data and DP-only CE?
+      All at n_train=4096, epochs=20, layer=10, mem=32.</p>
+    <ul>
+      <li><code>E1_ffff_dponly</code> — ffff data + DP-only CE. The "minimal" config.</li>
+      <li><code>E2_ffff_fullseq</code> — ffff data + full-sequence CE + gate.</li>
+      <li><code>E3_all_dponly_f</code> — all data + DP-only CE with <code>f</code> target override.</li>
+      <li><b><code>E4_all_fullseq_f</code></b> — all data + full-sequence CE + <code>f</code> override.
+        The winner of the pilot and our "strong reference" for everything else.</li>
+    </ul>
+    <span class="ex">Result: E4 lifted full-val f_selection from 0.53 → 0.91. E1 barely moved it (+0.03).</span>
+
+    <h3>W01_reference</h3>
+    <p>First run of the "W" (weighed matrix) plan before we switched to Phases 1–3.
+      Same config as E4 but at <code>n_train=2048, epochs=10</code>. Kept for continuity.</p>
+
+    <h3>D_n*_e*, M_mem*_n100_e30 &nbsp;— data-efficiency sweep &nbsp; <a class="filter-link" data-q="D_n">[D_n*]</a> &nbsp; <a class="filter-link" data-q="M_mem">[M_mem*]</a></h3>
+    <p>How few training examples does the memory need? Grid over
+      <code>n_train ∈ {10, 30, 100, 300, 1000, 3000}</code> ×
+      <code>epochs ∈ {5, 10, 20, 30, 50, 100, 200}</code>
+      at layer 10, mem=32. The <code>M_mem{N}_n100_e30</code> runs also vary memory size at the (broken)
+      n=100 regime.</p>
+    <span class="ex">Key finding: n ≤ 100 doesn't align regardless of epochs or N. The knee is at n=1000.
+E.g. D_n10_e200 (three seeds) all regress ffff f_sel by 4–7 pts — overfitting to 10 examples.</span>
+
+    <h2>Phase 1 — screening sweep (46 runs, single-axis ablations)</h2>
+    <p>Every run tests one axis with everything else set to a reference config:
+      <code>data=all, ce=full_seq, dp_target=f, layer=10, mem=32, gate=on, lr=1e-3, bs=8, n=3000, e=10</code>.
+      Ran at <code>n_eval=50</code> for speed.</p>
+
+    <h3>A1 – A5 &nbsp;— ingredient ablations &nbsp; <a class="filter-link" data-group="p1_ingredient">[show]</a></h3>
+    <ul>
+      <li><code>A1_ref</code> — the reference itself.</li>
+      <li><code>A2_no_mix</code> — reference but with ffff data instead of all data.</li>
+      <li><code>A3_no_fullseq</code> — reference but with DP-only CE.</li>
+      <li><code>A4_no_gate</code> — reference without the learnable gate.</li>
+      <li><code>A5_no_override</code> — reference but <code>dp_target=gt</code> instead of <code>f</code>.</li>
+    </ul>
+    <span class="ex">A5 showed `dp_target=f` override is the single most important ingredient;
+without it, mixed data gives ≈ 0 alignment gain.</span>
+
+    <h3>B_layer*, B_layers_*_* &nbsp;— layer sweep &nbsp; <a class="filter-link" data-group="p1_layer">[show]</a></h3>
+    <p>Where in the network is the memory most effective? Tested single layers and multi-layer combos.</p>
+    <span class="ex">LAYER 2 CRUSHED LAYER 10. Paired comparison showed +0.22 full f_sel just from
+switching layer=10 → layer=2. Multi-layer {6,10} was comparable. Later layers (8, 10, 11) underperform.</span>
+
+    <h3>C_mem* &nbsp;— memory-size sweep &nbsp; <a class="filter-link" data-group="p1_mem_n1000">[at n=1000]</a> &nbsp; <a class="filter-link" data-group="p1_mem_n3000">[at n=3000]</a></h3>
+    <p>Varies <code>mem_entries ∈ {2, 4, 8, 16, 64}</code> at two n_train values
+      (<code>n=1000</code> and <code>n=3000</code>) to see where the N/data interaction saturates.</p>
+    <span class="ex">At n=3000, mem=64 edges out mem=32. At n=1000, mem=8 suffices. Larger N helps when data is larger.</span>
+
+    <h3>D_sp* &nbsp;— sparsity sweep &nbsp; <a class="filter-link" data-group="p1_sparsity">[show]</a></h3>
+    <p>Varies <code>sparsity_coeff ∈ {0.001, 0.01, 0.1, 0.3, 1.0}</code> of the
+      <code>l2_nondp</code> penalty (L2 on memory output at non-DP positions).
+      Does suppressing off-DP correction improve op_accuracy?</p>
+    <span class="ex">λ ≥ 0.1 zeros the memory out entirely (no alignment at all).
+λ ≤ 0.01 is nearly a no-op at layer 10. Sparsity at layer 2 is untested.</span>
+
+    <h3>E_lr* &nbsp;— learning rate sweep &nbsp; <a class="filter-link" data-group="p1_lr">[show]</a></h3>
+    <p>LR ∈ {1e-4, 3e-4, 3e-3, 1e-2} (1e-3 is the A1_ref default).</p>
+    <span class="ex">3e-3 was the clear winner (+0.30 full f_sel vs +0.18 at 1e-3). Small LoRA-style modules tolerate larger LRs than the pretrained model does.</span>
+
+    <h3>F_bs* &nbsp;— batch size sweep &nbsp; <a class="filter-link" data-group="p1_batch">[show]</a></h3>
+    <p>bs ∈ {4, 16, 32} (bs=8 is the default).</p>
+    <span class="ex">bs=4 won — more gradient updates per epoch at fixed data budget.</span>
+
+    <h3>G_n1000_e* &nbsp;— epochs at n=1000 &nbsp; <a class="filter-link" data-group="p1_epochs_n1000">[show]</a></h3>
+    <p>Does more compute at the minimum-viable data amount (n=1000) close the gap? ep ∈ {20, 30, 50}.</p>
+    <span class="ex">G_n1000_e50 reached +0.26 full f_sel — still well below n=3000 runs at similar compute.</span>
+
+    <h3>H_n3000_e* &nbsp;— epochs at n=3000 &nbsp; <a class="filter-link" data-group="p1_epochs_n3000">[show]</a></h3>
+    <p>ep ∈ {20, 30} to test whether more epochs on the sweet-spot data amount beats the default e=10.</p>
+    <span class="ex">H_n3000_e30 reached +0.36 — competitive with E4 at much less compute.</span>
+
+    <h3>I_* &nbsp;— hand-crafted compound configs &nbsp; <a class="filter-link" data-group="p1_compound">[show]</a></h3>
+    <p>Author-picked combinations of small mem + sparsity + layer to see if they preserve op_accuracy.
+      Example: <code>I_mem8_sp0p1_l10</code> = mem=8, λ=0.1, layer=10.</p>
+
+    <h2>Phase 2 — seed-confirmation of top 5 (P2_*) &nbsp; <a class="filter-link" data-group="p2_top5_seeds">[show]</a></h2>
+    <p>Takes the top 5 Phase 1 configs by full-val f_sel and re-runs each with 3 seeds at
+      <code>n_eval=200</code> to confirm the result isn't noise. Naming:
+      <code>P2_&lt;base_config&gt;_s{0,1,2}</code>. E.g. <code>P2_B_layer2_s0</code> is layer 2 seed 0.</p>
+    <span class="ex">Four of the top five were single-layer runs with layer ∈ {2, 4, 6}; the fifth was H_n3000_e30.
+All five confirmed the Phase 1 result tightly (std ≲ 0.02).</span>
+
+    <h2>Phase 3 — compound best (P3_*) &nbsp; <a class="filter-link" data-group="p3_final">[show]</a></h2>
+    <p>Takes the <b>best single-axis winner from each Phase 1 ablation</b> (best layer, best LR, best mem,
+      best batch size, best sparsity) and combines them all into one config. Runs 3 seeds × 3 epoch
+      budgets at <code>n_eval=300</code>. This is where our current overall best model lives.</p>
+    <h3>P3_compound_n3000_e*_s*</h3>
+    <p>The compound config: <b>layer 2 + lr 3e-3 + mem 64 + bs 4 + no sparsity</b>, with
+      data=all, ce=full_seq, dp_target=f, gate. Varied only epoch count (10, 20, 30).</p>
+    <span class="ex">All three epoch budgets converged to the same result (+0.446 full f_sel).
+Memory training converges in 10 epochs; more is wasted compute.
+THIS IS THE WINNER OF THE OVERALL SWEEP.</span>
+    <h3>P3_bonus_I_mem4_sp0p01_l10_s*</h3>
+    <p>"Bonus" slot: re-run the best Phase 1 <code>I_*</code> hand-crafted compound at larger compute
+      (n=3000, e=20) × 3 seeds. Lets us sanity-check that the author's guess about small mem + small sparsity
+      holds up with more training.</p>
+
+    <h2>Current sweep: L2_n*_N* — layer-2 × (n_train × mem_entries) grid &nbsp; <a class="filter-link" data-group="layer2_nxN">[show]</a></h2>
+    <p>After Phase 3 showed layer 2 dominates, we're running a cleaner grid at the winning config
+      (layer 2, lr 3e-3, bs 4, 10 epochs) varying only <b>n_train</b> and <b>mem_entries</b>. 28 runs total.
+      Naming: <code>L2_n{n_train}_N{mem_entries}</code>. E.g. <code>L2_n1000_N8</code> = layer 2, 1000 examples,
+      8 memory entries.</p>
+    <span class="ex">Open questions this answers: does layer 2 rescue the n=100 regime that was broken at layer 10?
+Can N=1 suffice when data is plentiful? (Early answer: yes, and yes.)</span>
+    <h3>Old M_mem*_n100_e30 vs new L2_n100_N*</h3>
+    <p class="muted">The old M_mem runs were at layer 10 and all flat. Compare directly with the new L2_n100_N*
+      runs at layer 2 to see the layer effect at the same data amount.</p>
+
+    <h2>Cheat sheet — glossary of naming conventions</h2>
+    <ul>
+      <li><b>n / n_train</b>: training examples from the mixed-trace data.</li>
+      <li><b>e / ep / epochs</b>: passes through the training set.</li>
+      <li><b>N / mem / mem_entries</b>: number of (key, value) rows in the memory module.</li>
+      <li><b>L / layer / layers</b>: residual-stream layer(s) where the memory is hooked. Comma-separated for multi-layer.</li>
+      <li><b>lr</b>: AdamW learning rate.</li>
+      <li><b>bs</b>: batch size.</li>
+      <li><b>sp</b>: sparsity penalty. <code>none</code> = off; a number is the λ coefficient of the L2 penalty on non-DP memory output.</li>
+      <li><b>_s&lt;N&gt;</b>: seed suffix (default seed=0 if not shown).</li>
+      <li><b>mode</b>: A = train on ffff with GT labels (naive); B = train on all data with <code>f</code> override at DP positions.</li>
+    </ul>
+
+    <h2>Metric shortcuts</h2>
+    <ul>
+      <li><b>f_selection</b>: fraction of DP steps where the model picked <code>f</code>'s letter. Averaged over steps.</li>
+      <li><b>full_f_alignment</b>: fraction of <em>examples</em> where <em>every</em> step picked f. Strictly stronger.</li>
+      <li><b>operation_accuracy</b>: arithmetic correctness. Must not regress.</li>
+      <li><b>ffff vs full</b>: two val slices. ffff = f-only subset (<code>complete_solution</code> meaningful). full = all coin-flip patterns (the honest alignment test).</li>
+    </ul>
+  </div>
+  </div>
+
+<script src="data.js"></script>
+<script>
+(() => {
+  const data = window.RUNS || [];
+  if (!data.length) {
+    document.getElementById('meta').innerHTML =
+      'no runs loaded — run <code>python visualization/build_data.py</code> to generate <code>data.js</code>';
+    return;
+  }
+
+  // Column definitions.  Tooltip text is shown on hover.
+  const COLS = [
+    {k:'name',  h:'name',  kind:'name', tip:'Run identifier (the --name flag of exp.py).'},
+    {k:'grp',   h:'group', kind:'cfg',  val:r=>r.config.wandb_group, tip:'wandb_group — the sweep block this run belonged to.'},
+    {k:'layer', h:'L',     kind:'cfg',  val:r=>r.config.layers, tip:'--layers: index of the residual-stream layer(s) where the memory is injected. Earlier layers propagate more into downstream logits.'},
+    {k:'mem',   h:'N',     kind:'cfg',  val:r=>r.config.mem_entries, tip:'--mem_entries: number of (key, value) rows in the memory module. More → more capacity to specialize; query_proj dominates param count.'},
+    {k:'n',     h:'n_train', kind:'cfg', val:r=>r.config.n_train, tip:'--n_train: number of training traces seen by the memory.'},
+    {k:'ep',    h:'ep',    kind:'cfg',  val:r=>r.config.epochs, tip:'--epochs: passes through the training set.'},
+    {k:'lr',    h:'lr',    kind:'cfg',  val:r=>r.config.lr, fmt:v=>v?.toExponential(0)??'', tip:'--lr: AdamW learning rate.'},
+    {k:'bs',    h:'bs',    kind:'cfg',  val:r=>r.config.batch_size, tip:'--batch_size.'},
+    {k:'gate',  h:'g',     kind:'cfg',  val:r=>r.config.gate ? '✓' : '·', tip:'--gate: learnable scalar γ multiplying the memory output. ✓ = on.'},
+    {k:'sp',    h:'sp',    kind:'cfg',  val:r=>r.config.sparsity==='none'?'·':`${r.config.sparsity_coeff}`, tip:'Sparsity penalty on ||mem_out|| at non-DP positions. "·" = none; a number is the λ coefficient for l2_nondp.'},
+    {k:'fs_ff', h:'ffff f_sel',        kind:'delta', val:r=>[r.baseline_fonly.f_selection, r.memory_fonly.f_selection], tip:'f_selection on ffff val (%). Fraction of decision-point steps where the model picked f\'s letter. Primary alignment metric on the in-distribution subset.'},
+    {k:'fa_ff', h:'ffff full_align',   kind:'delta', val:r=>[r.baseline_fonly.full_f_alignment, r.memory_fonly.full_f_alignment], tip:'full_f_alignment on ffff val. Fraction of EXAMPLES where every step picked f (strict per-example alignment).'},
+    {k:'oa_ff', h:'ffff op_acc',       kind:'delta', val:r=>[r.baseline_fonly.operation_accuracy, r.memory_fonly.operation_accuracy], tip:'operation_accuracy on ffff val. Fraction of blocks where re-executing the chosen letter\'s arithmetic gives back the emitted block text.'},
+    {k:'cs_ff', h:'ffff complete_sol', kind:'delta', val:r=>[r.baseline_fonly.complete_solution, r.memory_fonly.complete_solution], tip:'complete_solution on ffff val. All ops correct AND all letters valid f-or-g AND final vec = GT OUTPUT. Only interpretable on ffff.'},
+    {k:'fs_fu', h:'full f_sel',        kind:'delta', val:r=>[r.baseline_full.f_selection, r.memory_full.f_selection], tip:'f_selection on full val (all coin-flip patterns). The HONEST alignment test — measures steering on hidden states the memory may never have seen at training.'},
+    {k:'fa_fu', h:'full full_align',   kind:'delta', val:r=>[r.baseline_full.full_f_alignment, r.memory_full.full_f_alignment], tip:'full_f_alignment on full val. Fraction of examples end-to-end f-aligned. This is the headline for inference-time alignment.'},
+    {k:'oa_fu', h:'full op_acc',       kind:'delta', val:r=>[r.baseline_full.operation_accuracy, r.memory_full.operation_accuracy], tip:'operation_accuracy on full val. A regression here is the "cascading-arithmetic cost" of steering to f when the model had drifted onto an off-path vector.'},
+    {k:'params',h:'params',kind:'num',  val:r=>r.trainable_params, fmt:v=>v?(v/1000).toFixed(0)+'K':'', tip:'Trainable parameters in the memory module. The frozen base model has ~30M params (not counted here).'},
+    {k:'tt',    h:'train s', kind:'num', val:r=>r.train_time_sec, fmt:v=>v?.toFixed(0)??'', tip:'Seconds of training time (excludes the two eval passes).'},
+  ];
+
+  // Populate filter dropdowns
+  const uniq = (arr) => [...new Set(arr.filter(x=>x!=null&&x!==''))].sort((a,b)=>{
+    const na = +a, nb = +b;
+    if(!isNaN(na) && !isNaN(nb)) return na-nb;
+    return String(a).localeCompare(String(b));
+  });
+  const populate = (id, values) => {
+    const sel = document.getElementById(id);
+    for (const v of values) {
+      const o = document.createElement('option');
+      o.value = v; o.textContent = v;
+      sel.appendChild(o);
+    }
+  };
+  populate('group', uniq(data.map(r=>r.config.wandb_group)));
+  populate('layer', uniq(data.map(r=>r.config.layers)));
+  populate('data',  uniq(data.map(r=>r.config.data_filter)));
+  populate('ce',    uniq(data.map(r=>r.config.ce_mode)));
+  populate('dp',    uniq(data.map(r=>r.config.dp_target)));
+
+  // Build header
+  const head = document.getElementById('head');
+  COLS.forEach((c, i) => {
+    const th = document.createElement('th');
+    th.textContent = c.h;
+    th.setAttribute('data-tip', c.tip);
+    th.dataset.i = i;
+    th.className = c.kind === 'name' ? 'name' : (c.kind === 'cfg' ? 'cfg' : '');
+    th.addEventListener('click', () => sortBy(i));
+    head.appendChild(th);
+  });
+
+  // Delta cell renderer: base→mem (Δ)
+  const fmtDelta = ([b, m]) => {
+    if (b==null || m==null) return '<span style="color:var(--muted)">—</span>';
+    const d = m - b;
+    const sign = d > 0.001 ? 'sign-pos' : (d < -0.001 ? 'sign-neg' : '');
+    const arrow = d > 0.001 ? '+' : '';
+    const bar = Math.min(Math.abs(d) * 140, 80);
+    const fg = d > 0 ? 'var(--good)' : 'var(--bad)';
+    // Tiny inline bar showing magnitude.
+    const bg = Math.abs(d) < 0.002 ? '' :
+      `background: linear-gradient(90deg, ${fg}22 ${bar}%, transparent ${bar}%);`;
+    return `<span class="delta" style="${bg}display:inline-block; padding:0 4px; border-radius:2px; min-width:80px">
+      <span style="color:var(--muted); font-size:10px">${b.toFixed(3)}</span>
+      <span class="${sign}">→${m.toFixed(3)}</span>
+      <span class="${sign}" style="font-size:10px"> (${arrow}${d.toFixed(3)})</span>
+    </span>`;
+  };
+
+  let sortKey = 'fs_fu', sortDir = -1;
+  const sortBy = (i) => {
+    const k = COLS[i].k;
+    if (k === sortKey) sortDir = -sortDir;
+    else { sortKey = k; sortDir = -1; }
+    render();
+  };
+
+  const getCell = (r, c) => {
+    if (c.kind === 'name') return r.name;
+    if (c.kind === 'delta') return c.val(r);
+    return c.val(r);
+  };
+
+  const filtered = () => {
+    const q = document.getElementById('q').value.toLowerCase();
+    const g = document.getElementById('group').value;
+    const L = document.getElementById('layer').value;
+    const dF = document.getElementById('data').value;
+    const ce = document.getElementById('ce').value;
+    const dp = document.getElementById('dp').value;
+    return data.filter(r => {
+      if (q && !JSON.stringify(r).toLowerCase().includes(q)) return false;
+      if (g && r.config.wandb_group !== g) return false;
+      if (L && String(r.config.layers) !== L) return false;
+      if (dF && r.config.data_filter !== dF) return false;
+      if (ce && r.config.ce_mode !== ce) return false;
+      if (dp && r.config.dp_target !== dp) return false;
+      return true;
+    });
+  };
+
+  const render = () => {
+    const rows = filtered();
+    // Sort
+    const ci = COLS.findIndex(c => c.k === sortKey);
+    const sorter = (a, b) => {
+      const va = getCell(a, COLS[ci]);
+      const vb = getCell(b, COLS[ci]);
+      let A = Array.isArray(va) ? (va[1]-va[0]) : va;
+      let B = Array.isArray(vb) ? (vb[1]-vb[0]) : vb;
+      if (A == null) A = -Infinity;
+      if (B == null) B = -Infinity;
+      if (typeof A === 'string' || typeof B === 'string') {
+        return String(A).localeCompare(String(B)) * sortDir;
+      }
+      return (A - B) * sortDir;
+    };
+    rows.sort(sorter);
+
+    document.querySelectorAll('th').forEach((th, i) => {
+      th.classList.remove('sorted-asc', 'sorted-desc');
+      if (COLS[i].k === sortKey)
+        th.classList.add(sortDir > 0 ? 'sorted-asc' : 'sorted-desc');
+    });
+
+    const body = document.getElementById('body');
+    body.innerHTML = '';
+    for (const r of rows) {
+      const tr = document.createElement('tr');
+      for (const c of COLS) {
+        const td = document.createElement('td');
+        if (c.kind === 'name') {
+          td.className = 'name';
+          td.textContent = r.name;
+        } else if (c.kind === 'delta') {
+          td.innerHTML = fmtDelta(c.val(r));
+        } else {
+          td.className = c.kind;
+          const v = c.val(r);
+          td.textContent = c.fmt ? c.fmt(v) : (v ?? '');
+        }
+        tr.appendChild(td);
+      }
+      body.appendChild(tr);
+    }
+    document.getElementById('count').textContent =
+      `${rows.length} / ${data.length} runs`;
+  };
+
+  document.getElementById('meta').textContent =
+    `${data.length} runs loaded`;
+  ['q','group','layer','data','ce','dp'].forEach(id =>
+    document.getElementById(id).addEventListener('input', render));
+  render();
+
+  // ── Tab switching ─────────────────────────────────────────────────────
+  const tabRuns = document.getElementById('tab-runs');
+  const tabGuide = document.getElementById('tab-guide');
+  const viewRuns = document.getElementById('view-runs');
+  const viewGuide = document.getElementById('view-guide');
+  const showRuns = () => {
+    tabRuns.classList.add('active'); tabGuide.classList.remove('active');
+    viewRuns.classList.remove('hidden'); viewGuide.classList.add('hidden');
+  };
+  const showGuide = () => {
+    tabGuide.classList.add('active'); tabRuns.classList.remove('active');
+    viewGuide.classList.remove('hidden'); viewRuns.classList.add('hidden');
+  };
+  tabRuns.addEventListener('click', showRuns);
+  tabGuide.addEventListener('click', showGuide);
+
+  // ── Filter-link helpers in the Guide view ────────────────────────────
+  // Any <a class="filter-link" data-q="..." data-group="..." data-layer="...">
+  // in the guide will set the matching filter and switch to the table.
+  document.querySelectorAll('.filter-link').forEach(a => {
+    if (a.dataset.q == null && a.dataset.group == null &&
+        a.dataset.layer == null) return;  // decorative links
+    a.addEventListener('click', (e) => {
+      e.preventDefault();
+      ['q','group','layer','data','ce','dp'].forEach(id =>
+        document.getElementById(id).value = '');
+      if (a.dataset.q)     document.getElementById('q').value = a.dataset.q;
+      if (a.dataset.group) document.getElementById('group').value = a.dataset.group;
+      if (a.dataset.layer) document.getElementById('layer').value = a.dataset.layer;
+      render();
+      showRuns();
+    });
+  });
+})();
+</script>
+</body>
+</html>

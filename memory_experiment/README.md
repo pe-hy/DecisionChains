@@ -221,6 +221,7 @@ End-to-end (only meaningful on `ffff` val):
 | `run_phase2.py` | Takes Phase 1 JSONs, picks top-5 by full-val f_selection, confirms with 3 seeds at `n_eval=200`. |
 | `run_phase3.py` | Combines best layer/sparsity/mem/lr/bs from Phase 1; runs compound × compute budgets × 3 seeds at `n_eval=300`. |
 | `summarize_sweep.py` | Builds `outputs/final_results.md` from all phase JSONs. |
+| `visualization/` | Static HTML viewer for all runs (`visualization/index.html`, regenerated via `visualization/build_data.py`). |
 | `metrics.py` | Trace parsing, scoring, aggregation. |
 | `checkpoint/12l-8h-512d-decision-chains-ext_6_2M/` | Pretrained LitGPT + HF copy. |
 | `outputs/experiments/` | Per-experiment result JSONs (config, history, metrics). |
