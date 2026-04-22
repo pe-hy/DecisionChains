@@ -516,6 +516,24 @@ def aggregate_scores(scores: list[TraceScore]) -> dict:
         h / d if d else 0.0 for h, d in zip(per_step_hits, per_step_denom)
     ]
 
+    # Per-chain-length aggregation: bucket scores by n_steps and re-aggregate.
+    # Useful for: "does memory steer 3-step chains better than 5-step chains?"
+    by_len = {}
+    for s in scores:
+        by_len.setdefault(s.n_steps, []).append(s)
+    per_len = {}
+    for L, bucket in by_len.items():
+        ops = sum(x.n_steps for x in bucket)
+        per_len[str(L)] = {
+            "num_examples": len(bucket),
+            "operation_accuracy": sum(x.op_correct for x in bucket) / ops if ops else 0.0,
+            "f_or_g_valid_selection": sum(x.sel_correct for x in bucket) / ops if ops else 0.0,
+            "f_selection": sum(x.f_hits for x in bucket) / ops if ops else 0.0,
+            "full_f_alignment": sum(1 for x in bucket if x.full_f_aligned) / len(bucket),
+            "chain_matches_output": sum(1 for x in bucket if x.chain_matches_output) / len(bucket),
+            "complete_solution": sum(1 for x in bucket if x.full_correct) / len(bucket),
+        }
+
     return {
         "num_examples": n,
         "operation_accuracy": op_correct / total_ops if total_ops > 0 else 0.0,
@@ -526,6 +544,7 @@ def aggregate_scores(scores: list[TraceScore]) -> dict:
         "complete_solution": full_correct / n,
         "per_step_f_selection": per_step_f_rate,
         "per_step_denominator": per_step_denom,
+        "by_chain_length": per_len,
     }
 
 

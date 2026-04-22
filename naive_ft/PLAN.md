@@ -1,5 +1,8 @@
 # Naive Finetuning Baseline — Plan (minimal start)
 
+> **Historical design notes** — kept for reference. For current state
+> and usage, see `README.md`.
+
 ## Why
 
 We have memory-based alignment in `../memory_experiment/`: ~330K trainable

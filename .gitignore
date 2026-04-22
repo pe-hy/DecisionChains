@@ -13,7 +13,45 @@
 **/outputs/*.npz
 **/outputs/*.pt
 **/outputs/*.bin
+**/outputs/baseline/
 wandb/
+
+# Model weights at any path
+*.safetensors
+*.ckpt
+*.pth
+*.h5
+*.hdf5
+
+# HuggingFace / generic caches
+hf_cache/
+.cache/
+.huggingface/
+
+# Logs
+*.log
+nohup.out
+
+# Archives (data dumps)
+*.tar
+*.tar.gz
+*.tgz
+*.zip
+
+# Virtual envs
+.venv/
+venv/
+env/
+
+# Notebooks
+.ipynb_checkpoints/
+
+# Backups
+*.bak
+*.orig
+
+# Data copies — reproducible from external source; see each project's CLAUDE.md
+math_qwen_memory/data/
 
 # Checkpoints and temp
 memory_experiment/checkpoint/

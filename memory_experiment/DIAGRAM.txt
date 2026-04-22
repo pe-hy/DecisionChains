@@ -5,14 +5,14 @@
 PROMPT (one example):
   [BOS] INPUT : [4,3,8,7,7,4] OUTPUT : [2,0,8,4,3,9] [TRACE]    ► autoregressive
 
-Decision functions on the current intermediate vector v:
-  f(v) = is_even(v[0])·10 + v[1]   →   index 0..19   →   letter a..t
-  g(v) = is_even(v[3])·10 + v[4]   →   index 0..19   →   letter a..t
+DECISION FUNCTIONS (applied to current vector v):
+  f(v) = 10 + v[1]  if v[0] even, else v[1]         → index 0..19 → letter a..t
+  g(v) = 10 + v[4]  if v[3] even, else v[4]         → index 0..19 → letter a..t
 
 For v=[4,3,8,7,7,4]:   f → 'n' (add_first_to_all)
                        g → 'h' (swap_pairs)
-The pretrained model picks 50/50 because both were valid in pretraining.
-ALIGNMENT GOAL: always pick f, without touching the base model.
+Pretrained model picks 50/50 (both valid in pretraining).
+ALIGNMENT GOAL: always pick f.  Base model stays frozen.
 
 
 ── FORWARD PASS WITH MEMORY HOOK ─────────────────────────────────────────────
@@ -22,11 +22,11 @@ ALIGNMENT GOAL: always pick f, without touching the base model.
                └────────────┬────────────┘
                             ▼   hidden  h ∈ ℝ^{B × T × D},  D = 512
                ┌─────────────────────────┐
-               │   layer L               │   FROZEN
+               │   layer L  (default 2)  │   FROZEN
                └────────────┬────────────┘
                             ▼   h
    ╔════════════════════════════════════════════════════════════════════╗
-   ║  EXTERNAL MEMORY   ←  ONLY THIS IS TRAINED  (≈ 270 K params)       ║
+   ║  EXTERNAL MEMORY   ←  ONLY THIS IS TRAINED  (≈ 295 K params)       ║
    ║                                                                    ║
    ║      h ── [ W_q ] ──► q                                            ║
    ║                       │                                            ║
@@ -52,72 +52,70 @@ ALIGNMENT GOAL: always pick f, without touching the base model.
                          logits  ─►  next-token softmax
 
 
-── WHAT IS WHAT ──────────────────────────────────────────────────────────────
+── TRAINABLE PARAMETERS (defaults: N=32, D=512) ──────────────────────────────
 
-  Trained:    K   (N × D)        ─ keys     "this position needs steering"
-              V   (N × D)        ─ values   "the correction vector to add"
-              W_q (D × D)        ─ query projection
-              γ   (1)  optional  ─ scalar gate on the correction
-              ≈ 270 K params total  (W_q ≈ 262 K dominates)
-
-  Frozen:     everything else  (~30 M base-model params)
-
-  Defaults:   B = batch,  T ≤ 512,  D = 512,  L = 10,  N ∈ {16, 32}
+    K  (N × D)            32 × 512  =    16K   keys
+    V  (N × D)            32 × 512  =    16K   values
+    W_q  (D × D)         512 × 512  =   262K   query projection
+    γ  (1)                            =     1   optional gate
+    ─────────────────────────────────────────
+    total                            ≈ 295 K   (~1% of frozen base)
 
 
 ── LOSS ──────────────────────────────────────────────────────────────────────
 
    L  =  CE_target   +   λ · sparsity_term
 
-   CE_target  ──  what the model should output  (--ce_mode)
-       dp_only       CE only at DP letter positions   (3–5 tokens / example)
-       full_seq      CE at every token after [TRACE]  (~20× more signal)
+   CE_target  ──  supervision scope  (--ce_mode)
+       full_seq      CE on every token after [TRACE]     ← USE THIS
+       dp_only       CE only at DP letter positions       (breaks arithmetic)
 
-   target letter at a DP  (--dp_target)
-       gt    use the letter from the GT trace  (may be mixed f / g)
-       f     use f(current_intermediate_vec)   ← the alignment override
+   target letter at DP  (--dp_target)
+       f     use f(current_intermediate_vec)              ← ALIGNMENT SIGNAL
+       gt    use GT-trace letter (no override)
 
-   sparsity_term  ──  surgicality penalty  (--sparsity, coef λ)
-       none      0
-       l2_nondp  mean ‖mem_out‖₂ over NON-DP valid positions
-                 → pushes correction → 0 where CE doesn't demand it
-                 (Old L1-on-softmax was a no-op: softmax sums to 1.)
-
-
-── WHERE THE LOSS APPLIES (one trace) ────────────────────────────────────────
-
-  [BOS] INPUT : [4,3,8,7,7,4] OUTPUT : [2,0,8,4,3,9] [TRACE] n : 4+4=8 , … R [..] ; r : … ;
-  └─────────────────── prompt (no CE) ──────────────────┘  ▲  └── arithmetic ──┘ ▲
-                                                           │                     │
-                                                       DP letter            DP letter
-                                                        target = f's          target = f's
-                                                       letter at v0          letter at v1
-
-  CE_target  ▲ at letters after [TRACE] / each ;  (with --ce_mode dp_only this is ALL)
-                ── with --ce_mode full_seq, every output token also gets CE ──
-  sparsity   ▼ at every other valid position  (only when --sparsity l2_nondp)
+   sparsity_term  (--sparsity, coef λ)
+       none          0                                     ← default
+       l2_nondp      mean ‖mem_out‖₂ over NON-DP positions
+                     (usually unnecessary at layer=2)
 
 
-── DATA  /  TRAIN-VAL SPLIT ──────────────────────────────────────────────────
+── DATA & EVALUATION ─────────────────────────────────────────────────────────
 
-   Letter tuples                144 297 train  ▕  4 904 val      0 overlap
-   Input vectors (sampled)       62 285 train  ▕  4 275 val      0 overlap
-   Coin-flip patterns (ffff,…)         56 train  ▕     56 val   uniform, shared
+   Training data (3000 mixed traces):
+     --data_filter all --ce_mode full_seq --dp_target f
 
-   ⇒ val tests COMPOSITIONAL generalization on novel letter tuples & vectors.
-   ⇒ filtering training to "ffff" is a coin-flip selection (not biased on
-     inputs); the memory then only sees hidden states from f-paths, which
-     is the off-path generalization risk for inference-time steering.
+   Validation (2000 examples each):
+     val_full      mixed coin-flip patterns   ← honest alignment test
+     val_ffff      all-f, disjoint from train  ← in-distribution test
+                   (--ffff_val_file ../outputs/data/decision_chains_extended/val_ffff.json)
+
+   Metrics:
+     f_selection       % of DP steps where model picked f        (per-step avg)
+     full_f_alignment  % of examples where EVERY step picked f   (strict)
+     operation_accuracy % of blocks with correct arithmetic      (must not regress)
 
 
-── EVALUATION  (always two passes) ───────────────────────────────────────────
+── BEST RECIPE ───────────────────────────────────────────────────────────────
 
-   ffff val   compositional generalization on the all-f subset.
-              Required slice for `complete_solution` to be meaningful
-              (final vec = GT OUTPUT only matches on the f-path).
-   full val   compositional generalization across MIXED coin-flip patterns.
-              The honest test of inference-time alignment.
+   layers=2 mem_entries=32 n_train=3000 epochs=10 lr=3e-3 batch_size=4
+   data_filter=all ce_mode=full_seq dp_target=f gate=on sparsity=none
 
-   PRIMARY  ─  f_selection        fraction of DPs the model picked f at
-   STRICT   ─  full_f_alignment   fraction of EXAMPLES that were all-f
-   FLOOR    ─  operation_accuracy arithmetic correctness, must not regress
+   Results (3 seeds, 2k val):
+     baseline  →  memory                 Δ
+     52.5%    →   97.4% ± 0.3         +44.9 pp   full f_selection
+      8.8%    →   88.0% ± 1.3         +79.2 pp   full_f_alignment
+     94.8%    →   93.3% ± 0.1          -1.5 pp   operation_accuracy
+
+   Training: ~220s on one A100.  295K trainable params (vs 30M frozen base).
+
+
+── WORKFLOW ──────────────────────────────────────────────────────────────────
+
+   python exp.py --name R [flags]            # one config → one JSON
+   python make_tables.py [--v2]              # tabulate all runs
+   python visualization/build_data.py        # refresh HTML viewer
+   outputs/comparison_table.pdf              # academic writeup
+
+   JSON schema (outputs/experiments/{name}.json) is source of truth —
+   every downstream tool reads it.

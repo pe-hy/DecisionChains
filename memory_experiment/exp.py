@@ -359,7 +359,12 @@ def main():
     ap.add_argument("--sparsity", choices=["none", "l2_nondp"], default="l2_nondp")
     ap.add_argument("--sparsity_coeff", type=float, default=0.1)
     ap.add_argument("--n_train", type=int, default=4096)
-    ap.add_argument("--n_eval", type=int, default=200)
+    ap.add_argument("--n_eval", type=int, default=200,
+                    help="Cap on val examples evaluated (both slices).")
+    ap.add_argument("--ffff_val_file", default=None,
+                    help="Optional path to a dedicated ffff-only val JSON "
+                         "(e.g. val_ffff.json). When set, the ffff eval uses "
+                         "this file instead of filtering the standard val.json.")
     ap.add_argument("--epochs", type=int, default=20)
     ap.add_argument("--batch_size", type=int, default=8)
     ap.add_argument("--lr", type=float, default=1e-3)
@@ -405,11 +410,19 @@ def main():
     with open(DATA_DIR / "val.json") as f:
         val_all = json.load(f)
     train_examples = filter_data(train_all, args.data_filter)[:args.n_train]
-    val_fonly = [ex for ex in val_all
-                 if all(d == "f" for d in ex.get("decision_funcs", []))][:args.n_eval]
+    # ffff eval: prefer dedicated file (2k disjoint ffff examples) if provided,
+    # else filter the standard val.json (~663 ffff examples after filter).
+    if args.ffff_val_file:
+        with open(args.ffff_val_file) as f:
+            val_fonly = json.load(f)[:args.n_eval]
+    else:
+        val_fonly = [ex for ex in val_all
+                     if all(d == "f" for d in ex.get("decision_funcs", []))][:args.n_eval]
     val_full = val_all[:args.n_eval]
     print(f"  train: {len(train_examples)} (filter={args.data_filter})")
-    print(f"  val ffff: {len(val_fonly)}   val full: {len(val_full)}")
+    print(f"  val ffff: {len(val_fonly)}"
+          f"{' (from ' + args.ffff_val_file + ')' if args.ffff_val_file else ''}"
+          f"   val full: {len(val_full)}")
 
     print("Preparing training data...")
     train_ids, train_mask, train_labels, train_dp_mask = prepare_training_data(
@@ -417,8 +430,15 @@ def main():
     )
 
     # Baseline depends only on (val data, n_eval), not on memory config —
-    # cache it to disk and reuse across the sweep.
-    cache_path = RESULTS_DIR / f"_baseline_cache_n{args.n_eval}.json"
+    # cache it to disk and reuse across the sweep. Include a tag derived
+    # from --ffff_val_file so switching val files invalidates the cache.
+    import hashlib
+    ffff_tag = ""
+    if args.ffff_val_file:
+        ffff_tag = "_" + hashlib.md5(
+            str(Path(args.ffff_val_file).resolve()).encode()
+        ).hexdigest()[:8]
+    cache_path = RESULTS_DIR / f"_baseline_cache_n{args.n_eval}{ffff_tag}.json"
     if cache_path.exists():
         print(f"\n── Baseline (cached from {cache_path.name}) ──")
         cache = json.load(open(cache_path))

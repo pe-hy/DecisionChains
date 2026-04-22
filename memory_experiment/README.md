@@ -1,299 +1,353 @@
 # Memory-Steered Decision Chains
 
-A small external **key-value memory** is added to a frozen pretrained
-transformer at inference time. The memory's job is to **bias the model's
-choice at decision points** without any base-model fine-tuning.
+An external key-value memory module is attached to a frozen pretrained
+transformer at **inference time**. The memory is the only trainable
+component (~295K params); the 30M-param base model never changes. The
+goal is to bias the model toward always picking the `f` decision
+function over `g` at each chain step — a toy setting for studying
+**inference-time alignment**.
 
-This README is the single source of truth. Other docs were retired —
-read this one before touching code.
+This README is the full picture. For a one-page overview see
+`DIAGRAM.txt`; for a short pointer see `CLAUDE.md`.
 
 ---
 
-## 1. The base task
+## 1. Base task
 
-The pretrained model is a **12L-8H-512D GPT-NeoX** trained to execute
-**decision chains**: a sequence of 3–5 vector transformations.
+The pretrained model is a **12-layer, 8-head, 512-dim GPT-NeoX**
+trained to execute **decision chains**: sequences of 3–5 vector
+transformations, where at each step one of two decision functions picks
+the next letter-op.
 
-At each chain step the model:
+Starting from an integer vector $v_0 \in \mathbb{Z}_{10}^6$, the model
+generates 3–5 blocks $(\ell_k, b_k, v_k)$ where:
+- $\ell_k \in \{a, \dots, t\}$ names one of 20 transformations
+- $b_k$ is the step-by-step arithmetic text
+- $v_k$ is the resulting vector
 
-1. Reads the current intermediate vector `v`.
-2. Picks one of two letters: `f(v)` or `g(v)`. Each maps the vector to one of
-   20 transformation letters `a..t` (e.g. `n` = add_first_to_all,
-   `m` = rotate_right). The decision functions are
-   `f(v)=is_even(v[0])*10+v[1]` and `g(v)=is_even(v[3])*10+v[4]`.
-3. Applies the chosen letter's transformation to `v` and emits the new vector.
+At each step, one of two decision functions is applied to $v_{k-1}$:
+```
+f(v) = 10 + v[1]  if v[0] even, else v[1]
+g(v) = 10 + v[4]  if v[3] even, else v[4]
+```
+Both map a vector to an index in {0, …, 19}, selecting one of 20
+letter-ops. Pretraining uses a fair coin flip between $f$ and $g$ at
+each step.
 
-In pretraining the coin flip between `f` and `g` is uniform, so the model
-learns **both** are valid. We want to **align it to always pick `f`**, using
-a tiny add-on memory rather than fine-tuning the 30M-param base.
-
-Example prompt (no chain yet):
+Example prompt:
 ```
 [BOS] INPUT : [ 4 , 3 , 8 , 7 , 7 , 4 ] OUTPUT : [ 2 , 0 , 8 , 4 , 3 , 9 ] [TRACE]
 ```
-The model autoregressively produces the trace after `[TRACE]`. At the prompt's
-last position (the `[TRACE]` token), the next token is **the first letter**.
-After each block, the next position (the `;`) selects the **next** letter.
-These are the **decision points (DPs)**.
+The model generates the trace after `[TRACE]` autoregressively. The
+`[TRACE]` token and each subsequent `;` are **decision points** — the
+positions whose next token is a letter.
+
+**Alignment goal:** always pick `f`'s letter, without modifying the
+base model.
 
 ---
 
-## 2. The memory mechanism
+## 2. Memory mechanism
 
-The base model is frozen. We hook a single layer `L` and add a residual
-correction:
+The base model is frozen. We hook a single layer $L$ (default $L=2$)
+and add a residual correction:
 
 ```
-                       frozen layers 0..L-1
-                              ↓
-                       layer L output  h ∈ ℝ^{B×T×D}    (D=512)
-                              │
-                              ▼
-            ┌──────────────── memory ────────────────┐
-            │   q   = W_q · h                  ∈ ℝ^{B×T×D}
-            │   attn = softmax(q · Kᵀ / √D)    ∈ ℝ^{B×T×N}    (N entries)
-            │   out  = γ · (attn · V)          ∈ ℝ^{B×T×D}
-            └────────────────────────────────────────┘
-                              │
-                              ▼
-                       h' = h + out   ← injected back into the residual stream
-                              ▼
-                       frozen layers L+1..11 → logits
+tokens ─► frozen layers 0..L-1
+           ↓
+        h ∈ ℝ^{B×T×D}        (D=512 hidden states at layer L)
+           │
+           ▼
+ ┌── memory (trainable, ~295K params) ──┐
+ │   q    = W_q · h                     │
+ │   attn = softmax(q · Kᵀ / √D)        │
+ │   out  = γ · (attn · V)              │
+ └──────────────────────────────────────┘
+           │
+           ▼
+        h' = h + out  ← injected into residual
+           ↓
+        frozen layers L+1..11 → logits
 ```
 
-What's trained:
+Trainable parameters:
 
 | Param | Shape | Role |
-|---|---|---|
-| `K` (keys) | `(N, D)` | Patterns: "this position needs steering" |
+|-------|-------|------|
+| `K` (keys) | `(N, D)` | Patterns of hidden states that should be corrected |
 | `V` (values) | `(N, D)` | Correction vectors to add |
-| `W_q` (query proj) | `(D, D)` | How to ask the memory from the hidden state |
-| `γ` (gate, optional) | `(1,)` | Scalar magnitude on the correction |
+| `W_q` (query proj) | `(D, D)` | Projects hidden state into query space |
+| `γ` (gate, optional) | `(1,)` | Scalar magnitude of the correction |
 
-Default `N=16` or `32`; total trainable params ≈ 270K (W_q dominates at 262K).
-Everything else, including all attention and MLP weights of the base model,
-**stays frozen**. Gradients flow through the frozen layers; they're treated as
-fixed nonlinearities the gradient passes through.
-
-The hook fires **at every token position** in the forward pass. At eval time,
-during autoregressive generation, only the first forward pass over the prompt
-adds the correction at the prompt positions; subsequent decoded tokens get the
-correction added at their own positions as they're generated.
+With defaults ($N{=}32$, $D{=}512$), that's $2 N D + D^2 + 1$ = **295K
+params**. The base model (30M params) stays frozen; gradients pass
+through its layers as fixed nonlinearities.
 
 ---
 
-## 3. The loss
+## 3. Training loss
 
 ```
-L = CE_target  +  λ · sparsity_term
+L_total = CE  +  λ · sparsity_term
 ```
 
-### CE_target — what the model should output
+**CE** depends on two flags:
+- `--ce_mode full_seq` (recommended): cross-entropy on every output
+  token after `[TRACE]`. Includes arithmetic tokens, which anchors
+  arithmetic behavior.
+- `--ce_mode dp_only`: cross-entropy only at decision-point letter
+  positions. Breaks arithmetic (op_acc ~50%) at n_train=3000 — don't
+  use.
 
-Two configurable supervision modes (`--ce_mode`):
+**Target** at decision-point positions is set by `--dp_target`:
+- `--dp_target f`: override GT token to $f(v_{k-1})$'s letter.
+  The actual alignment signal.
+- `--dp_target gt`: use GT trace's letter. No override.
 
-- **`dp_only`** — Cross-entropy only at DP letter positions. Target is set by
-  `--dp_target`:
-  - `gt`: the letter actually in the GT trace (mixed f/g if data is unfiltered).
-  - `f`:  `f(current_intermediate_vec)` regardless of the GT coin flip.
-  Intermediate vectors are computed by walking the GT trace under teacher
-  forcing.
+**Sparsity** optional:
+- `--sparsity none` (default): no penalty.
+- `--sparsity l2_nondp --sparsity_coeff λ`: L2 penalty on
+  `‖mem_out‖₂` at non-DP positions. Drives correction to zero except at
+  DPs. In practice unnecessary once layer=2 is chosen; λ≥0.1 zeros out
+  the memory entirely.
 
-- **`full_seq`** — Cross-entropy on every token after `[TRACE]`. The whole
-  trace is the target. This gives ~20× more gradient signal than `dp_only`
-  because every arithmetic token also contributes. With `--dp_target f` and
-  mixed data, the DP labels are overridden to `f`'s letter while arithmetic
-  labels follow the GT trace.
-
-### sparsity_term (`--sparsity`)
-
-- **`none`** — no penalty. The memory is free to attend everywhere.
-- **`l2_nondp`** — `mean(‖mem_out‖₂)` over **non-DP** positions (multiplied by
-  `--sparsity_coeff`, default 0.1). Pushes the correction magnitude toward
-  zero at arithmetic / prompt tokens, leaving CE to drive the magnitude up at
-  DPs. Goal: make the correction **surgical** (only fires where it matters).
-
-A historical note: an earlier version used `mean(|attn|)` on the softmax
-output. Since softmax sums to 1 and is non-negative, that quantity is always
-exactly `1/N` regardless of the parameters — zero gradient, a no-op. The
-`l2_nondp` variant fixes this by penalizing the actual correction vector.
+Optimizer: AdamW, lr $3 \times 10^{-3}$ (much higher than standard FT),
+batch size 4, 10 epochs. Training takes ~3 minutes on one A100.
 
 ---
 
-## 4. A worked example
+## 4. Data
 
-Take `INPUT : [ 4 , 3 , 8 , 7 , 7 , 4 ]`. Decision functions give:
+Pretraining data split is compositional:
+- **Letter tuples** (e.g. `q-s-q-t`): 144K train-reserved, 4.9K
+  test-reserved. **Zero overlap.**
+- **Input vectors**: split on a 95K/5K train/test basis. **Zero
+  overlap.**
+- **Coin-flip patterns** (e.g. `fff`, `fgfg`): all 56 patterns appear
+  in both. Patterns aren't held out.
 
-- `f([4,3,8,7,7,4]) = is_even(4)·10 + 3 = 13 → letter n` (add_first_to_all)
-- `g([4,3,8,7,7,4]) = is_even(7)·10 + 7 =  7 → letter h` (swap_pairs)
+### Dedicated 2k ffff val (`val_ffff.json`)
 
-Suppose the unaligned base model picks `h` (g-branch) because of how its 50/50
-training shaped it. We want the aligned model with memory to pick `n`
-(f-branch).
+Generated by `../scripts/generate_val_ffff.py`. Contains 1998 examples
+with:
+- Chain lengths 3, 4, 5 (666 each)
+- Every example uses `f` at every step
+- Letter tuples verified disjoint from `train.json`
 
-During training, with `--dp_target f`, the label at the `[TRACE]` position is
-the token id for `n`. CE pushes the logits at that position toward `n`. The
-memory learns `K`, `V`, `W_q` so that:
-
-- At positions whose hidden state looks like a DP, the query matches some key
-  strongly, and the corresponding value (added to `h`) shifts the next-token
-  logits toward `f`'s letter.
-- At arithmetic positions, no key matches (or `mem_out` magnitude is small),
-  so the residual stream is unchanged and the arithmetic behavior is
-  preserved.
-
-At inference: prompt is fed in, hook is active, the model decodes greedy. At
-the `[TRACE]` position the corrected logits make `n` the argmax. The model
-then emits the full `n`-block: `n : 4+4=8 , 3+4=7 , 8+4=2 , 7+4=1 , 7+4=1 ,
-4+4=8 R [ 8 , 7 , 2 , 1 , 1 , 8 ]`. Next DP is the `;` at the end of that
-block; same memory fires, picks `f` at the new vector `[8,7,2,1,1,8]`, and so
-on.
+Pass it via `--ffff_val_file ../outputs/data/decision_chains_extended/val_ffff.json`.
+The baseline cache keys on a hash of this path so switching val files
+invalidates the cache.
 
 ---
 
-## 5. Train / val split (important)
+## 5. Metrics
 
-The pretrained model's data was generated with **disjoint splits on letter
-tuples and input vectors**:
+All metrics are computed by running greedy generation on each val
+example and scoring the produced trace. Three headline metrics on two
+val slices.
 
-- 144,297 unique letter tuples in train, 4,904 in val — **0 overlap**.
-- Sampled input vectors: train and val have **0 overlap**.
-- Decision-function patterns (`fff`, `fgfg`, ...): all 56 patterns appear in
-  both — uniform random, independent of input/letter axes.
+### Metrics
 
-Practical implications:
+**f-selection (%)** — fraction of decision-point **steps** where the
+model picked $f$'s letter. Averaged over steps, so a 4-step chain
+contributes 4 data points. Baseline is ~52.5% on mixed val (coin flip)
+and ~77% on ffff val.
 
-- `val_fonly` (val examples with all-`f` coin flips): true compositional
-  generalization on novel letter tuples & vectors. Use this when you need
-  `complete_solution` to be meaningful (final vec = GT OUTPUT only matches on
-  the f-path).
-- `val_full` (no filter): the honest alignment metric — the same compositional
-  generalization, but across **all** coin-flip patterns. This catches the
-  off-path generalization issue: does the memory steer correctly even when
-  the model is mid-trajectory on a non-f path?
+**Full alignment (%)** — fraction of **examples** where every step
+picked $f$'s letter. Strict per-example conjunction: a chain with 4 of
+5 correct scores 0. Because `P(all-f) = p^n`, baseline at 52.5%
+per-step gives:
+- 3-step: 14.5%  •  4-step: 7.6%  •  5-step: 4.0%  •  average: ~8.7%
 
-Filtering training data to `ffff` is a coin-flip selection — it's
-distributionally clean (input vectors and letter tuples are unaffected) but
-it means the memory only ever sees hidden states from f-path trajectories.
-Mixed training (`--data_filter all` with `--dp_target f`) is the methodologically
-cleaner choice for steering at inference time.
+Observed baseline on mixed val: 8.8%. The +79 pp memory gain takes
+this to 88%.
 
----
+**Operation accuracy (%)** — fraction of blocks with correct
+arithmetic. For each block, we re-execute the chosen letter's
+transformation on the current intermediate vector and compare full
+block text. Must not regress meaningfully. Baseline: ~95%.
 
-## 6. Metrics
+### Two val slices
 
-All defined in `metrics.py`. Computed by walking the model's own generated
-trace; under the alignment-semantic, intermediate vectors are advanced by
-correctly executing the model's chosen letter (so the next-step f/g check is
-against the true next state, not the model's possibly-buggy arithmetic).
-
-Primary (alignment):
-
-- `f_selection` — fraction of steps where the model picked `f`'s letter.
-- `full_f_alignment` — fraction of **examples** where every step picked `f`.
-- `per_step_f_selection` — `f_selection` broken out by step index. Diagnoses
-  whether the memory is only effective at the first DP (where position is
-  fixed) or generalizes to mid-generation DPs.
-
-Sanity:
-
-- `operation_accuracy` — arithmetic correctness, must not drop.
-- `f_or_g_valid_selection` — letter is in `{f_letter, g_letter}`. The
-  pre-alignment "is the model producing valid decision-function output at
-  all" check.
-
-End-to-end (only meaningful on `ffff` val):
-
-- `chain_matches_output` — final vec = GT OUTPUT vec.
-- `complete_solution` — all ops correct **and** all sels valid **and** chain
-  matches output.
+- **`val_full`** (2k mixed-pattern examples) — honest alignment test.
+  Includes coin-flip histories the memory may not have seen during
+  training.
+- **`val_ffff`** (2k all-$f$ examples, disjoint from train) —
+  in-distribution test. `complete_solution` is only meaningful here
+  because GT OUTPUT equals the $f$-path output.
 
 ---
 
-## 7. Files
+## 6. Workflow
 
-| File | Role |
-|---|---|
-| `exp.py` | Unified experiment runner. One invocation = one config = one JSON. |
-| `compare.py` | Loads `outputs/experiments/*.json` and prints ranked tables. |
-| `run_all_phases.sh` | Master overnight sweep: Phase 1 → Phase 2 → Phase 3 → summarize. |
-| `run_phase1.sh` | 46-run screening sweep at `n_eval=50`. Tests every dimension at the new working point. |
-| `run_phase2.py` | Takes Phase 1 JSONs, picks top-5 by full-val f_selection, confirms with 3 seeds at `n_eval=200`. |
-| `run_phase3.py` | Combines best layer/sparsity/mem/lr/bs from Phase 1; runs compound × compute budgets × 3 seeds at `n_eval=300`. |
-| `summarize_sweep.py` | Builds `outputs/final_results.md` from all phase JSONs. |
-| `visualization/` | Static HTML viewer for all runs (`visualization/index.html`, regenerated via `visualization/build_data.py`). |
-| `metrics.py` | Trace parsing, scoring, aggregation. |
-| `checkpoint/12l-8h-512d-decision-chains-ext_6_2M/` | Pretrained LitGPT + HF copy. |
-| `outputs/experiments/` | Per-experiment result JSONs (config, history, metrics). |
-| `outputs/E1-E4_results.{md,txt}` | Pilot 2×2 comparison table. |
-| `outputs/data_efficiency_results.txt` | 18-run data-efficiency sweep result. |
-| `outputs/final_results.md` | Written by `summarize_sweep.py` after the full sweep. |
-| `outputs/BEST_MODEL.md` | Summary of the best recipe from the overnight sweep: config, hyperparam explanations, absolute numbers vs 2nd-best and E4. |
-| `old_scripts/` | Archived earlier sweep scripts superseded by `run_all_phases.sh`. |
-| `logs/` | All stdout logs + archived `wandb/`. |
-| `wandb/` | Current W&B run dir (runs launched via scripts go into `logs/wandb/` via `WANDB_DIR`). |
-| `CLAUDE.md` | Pointer file for Claude Code; defers to this README. |
-| `README.md` | This file. |
-| `DIAGRAM.txt` | One-page ASCII diagram. Open this first. |
-
----
-
-## 8. Running
+### Run one experiment
 
 ```bash
-# Single experiment — every dimension is a CLI flag.
-CUDA_VISIBLE_DEVICES=0 python exp.py --name E1_ffff_dponly \
-    --data_filter ffff --ce_mode dp_only --dp_target f \
-    --layers 10 --mem_entries 16 \
-    --sparsity l2_nondp --sparsity_coeff 0.1 \
-    --n_train 4096 --n_eval 200 --epochs 20
-
-# Full matrix (sequential on one GPU). Each writes outputs/experiments/<name>.json.
-python exp.py --name E1_ffff_dponly  --data_filter ffff --ce_mode dp_only --dp_target f --layers 10 --mem_entries 16 --sparsity l2_nondp --sparsity_coeff 0.1 --n_train 4096 --n_eval 200 --epochs 20
-python exp.py --name E2_ffff_fullseq --data_filter ffff --ce_mode full_seq --dp_target gt --layers 10 --mem_entries 32 --gate --sparsity none --n_train 4096 --n_eval 200 --epochs 20
-python exp.py --name E3_all_dponly_f --data_filter all  --ce_mode dp_only --dp_target f  --layers 10 --mem_entries 16 --sparsity l2_nondp --sparsity_coeff 0.1 --n_train 4096 --n_eval 200 --epochs 20
-python exp.py --name E4_all_fullseq_f --data_filter all --ce_mode full_seq --dp_target f  --layers 10 --mem_entries 32 --gate --sparsity none --n_train 4096 --n_eval 200 --epochs 20
-
-# Compare everything you've run.
-python compare.py
-python compare.py --only E1_ffff_dponly,E4_all_fullseq_f
+cd memory_experiment
+CUDA_VISIBLE_DEVICES=0 python exp.py --name myrun \
+    --data_filter all --ce_mode full_seq --dp_target f --gate \
+    --sparsity none \
+    --layers 2 --mem_entries 32 \
+    --lr 3e-3 --batch_size 4 \
+    --n_train 3000 --epochs 10 \
+    --ffff_val_file ../outputs/data/decision_chains_extended/val_ffff.json \
+    --n_eval 2000 \
+    --wandb --wandb_project memory-experiment --wandb_group my_sweep
 ```
 
-### Key flags reference
+Output: `outputs/experiments/myrun.json` with full config, per-epoch
+training history, baseline metrics (cached), memory metrics on both val
+slices.
 
-| Flag | Choices | Meaning |
-|---|---|---|
-| `--name` | str | Used as the JSON filename and table label. |
-| `--data_filter` | `ffff` | `all` | Training data slice (val is always evaluated both ways). |
-| `--ce_mode` | `dp_only` | `full_seq` | CE supervision scope. |
-| `--dp_target` | `gt` | `f` | What to predict at decision-point letter positions. |
-| `--layers` | comma list of ints | Layers to inject memory at (e.g. `10` or `6,10`). |
-| `--mem_entries` | int | `N`, the number of K/V memory rows. |
-| `--gate` | flag | Add a learnable scalar `γ` on `mem_out`. |
-| `--sparsity` | `none` | `l2_nondp` | Surgicality penalty on `‖mem_out‖` at non-DP. |
-| `--sparsity_coeff` | float | `λ` for the sparsity term. |
-| `--n_train`, `--n_eval`, `--epochs`, `--lr`, `--batch_size`, `--seed` | usual hyperparams. |
-| `--wandb` | flag | Log per-epoch CE / sparsity / norms and final eval metrics to W&B. |
-| `--wandb_project` | str | W&B project name (default `memory-experiment`). |
-| `--wandb_group` | str | Group label for the run (e.g. `sparsity`, `layer`) — clusters runs in the UI. |
+### Tabulate all runs (`make_tables.py`)
 
-A baseline-eval cache lives at `outputs/experiments/_baseline_cache_n<N_EVAL>.json`
-keyed by `--n_eval`. The first run for a given `n_eval` populates the cache;
-subsequent runs reuse it, halving wall time across a sweep.
+```bash
+python make_tables.py                     # all runs, sorted by Δfull f_sel
+python make_tables.py --v2                # only v2_ prefix (2k eval runs)
+python make_tables.py --prefix L          # only L0/L1/L2 layer-grid runs
+python make_tables.py --prefix FT         # only finetuning baselines
+python make_tables.py --sort d_full_f_selection_mean  # custom sort key
+```
+
+Auto-groups multi-seed runs (strips `_s{N}` suffix), shows mean ± std
+on each metric, plus params / time / n_eval columns.
+
+### HTML viewer
+
+```bash
+python visualization/build_data.py        # regenerates data.js
+open visualization/index.html             # in any browser
+```
+
+Sortable table with per-column tooltips. The Guide tab explains every
+run name and links to filtered views.
+
+### Compare against finetuning baselines
+
+```bash
+cd ../naive_ft
+python compare_vs_memory.py               # headline comparison table
+```
+
+See `../naive_ft/README.md` for the finetuning baseline setup.
 
 ---
 
-## 9. Reading `compare.py` output
+## 7. Key flags reference
 
-For each experiment, the comparison table shows `baseline → memory (delta)`
-on both `ffff` and `full` val slices, for the four headline metrics:
+### Memory architecture
+| Flag | Values | Default | Effect |
+|------|--------|---------|--------|
+| `--layers` | comma list | `10` | Residual layer(s) to inject at. **Use `2` or `1`** for best alignment. |
+| `--mem_entries` (N) | int | `16` | Rows in K, V. Saturates at N=4 for small data; N=32 for n=3000. |
+| `--gate` | flag | off | Adds learnable scalar γ. Small win (~+6 pp f_sel). |
 
-- `operation_accuracy` — arithmetic. Should not regress.
-- `f_selection` — primary alignment signal, averaged over steps.
-- `full_f_alignment` — per-example all-f alignment. Strictly stronger.
-- `complete_solution` — only meaningful on `ffff`.
+### Training
+| Flag | Values | Default | Effect |
+|------|--------|---------|--------|
+| `--data_filter` | `all` \| `ffff` | `ffff` | Training data. Use `all` for off-path generalization. |
+| `--ce_mode` | `full_seq` \| `dp_only` | `dp_only` | **Use `full_seq`** — dp_only breaks arithmetic at scale. |
+| `--dp_target` | `f` \| `gt` | `f` | Override GT label at DPs to $f(v)$. The main alignment signal. |
+| `--sparsity` | `none` \| `l2_nondp` | `l2_nondp` | Off-DP correction penalty. Usually unnecessary at layer=2. |
+| `--n_train` | int | `4096` | Training examples. Saturates around 3000. |
+| `--epochs` | int | `20` | Converges in 10 at lr=3e-3. |
+| `--lr` | float | `1e-3` | **Use `3e-3`** — 3× default is much better for memory-sized modules. |
+| `--batch_size` | int | `8` | Smaller is better: bs=4 > bs=8. |
 
-The "OVERALL RANKING" section at the bottom sorts by `f_selection` on
-**full val** — the honest test. The ffff-val numbers are the diagnostic /
-upper bound because the memory was (potentially) trained on the same
-distribution.
+### Evaluation
+| Flag | Values | Default | Effect |
+|------|--------|---------|--------|
+| `--n_eval` | int | `200` | Val examples per slice. Use 2000 for headline numbers. |
+| `--ffff_val_file` | path | none | Use dedicated ffff val (`val_ffff.json`) instead of filtering standard val. |
+
+### Logging
+| Flag | Values | Default | Effect |
+|------|--------|---------|--------|
+| `--wandb` | flag | off | Log per-epoch training + final eval metrics. |
+| `--wandb_project` | str | `memory-experiment` | W&B project name. |
+| `--wandb_group` | str | none | Group label (e.g. `v2_memory_main`). |
+| `--seed` | int | `0` | RNG seed. |
+
+---
+
+## 8. Files
+
+```
+memory_experiment/
+├── README.md            ← this file
+├── CLAUDE.md            ← short pointer + TL;DR
+├── DIAGRAM.txt          ← one-page ASCII visual
+├── exp.py               ← unified experiment runner
+├── metrics.py           ← trace parsing, scoring, aggregation
+├── make_tables.py       ← tabulates all runs with mean±std
+├── compare.py           ← older ranked-table viewer
+├── checkpoint/          ← pretrained LitGPT + HF copy (frozen base)
+├── outputs/
+│   ├── experiments/     ← per-run JSONs (source of truth)
+│   ├── comparison_table.{tex,pdf}  ← academic writeup
+│   ├── v2_results_table.txt        ← saved make_tables output
+│   └── *.md, *.txt                 ← other writeups
+├── visualization/
+│   ├── index.html       ← browser-based run viewer
+│   ├── data.js          ← generated from JSONs
+│   └── build_data.py    ← regenerates data.js
+├── logs/                ← active + archived sweep stdouts
+├── wandb/               ← local W&B cache (ignored)
+└── old_scripts/         ← superseded sweep scripts
+```
+
+Sibling folders:
+- `../naive_ft/` — finetuning baselines (full FT, LoRA)
+- `../outputs/data/decision_chains_extended/` — train.json, val.json, val_ffff.json
+
+---
+
+## 9. Best recipe
+
+```
+layers         = 2
+mem_entries    = 32
+n_train        = 3000
+epochs         = 10
+lr             = 3e-3
+batch_size     = 4
+data_filter    = all
+ce_mode        = full_seq
+dp_target      = f
+gate           = on
+sparsity       = none
+```
+
+Evaluated on 2k disjoint ffff val + 2k mixed val (3 seeds):
+
+| Metric | Baseline | Memory | Δ |
+|--------|---------:|-------:|--:|
+| full f-selection | 52.5% | 97.4% ± 0.3 | **+44.9** |
+| full f-alignment | 8.8% | 88.0% ± 1.3 | **+79.2** |
+| full op.\ accuracy | 94.8% | 93.3% ± 0.1 | −1.5 |
+| ffff f-selection | 76.8% | 99.8% ± 0.0 | +23.0 |
+| ffff op.\ accuracy | 95.1% | 99.8% ± 0.1 | +4.7 |
+
+Trainable: 295K params. Training time: 220s.
+
+---
+
+## 10. Key findings
+
+- **Layer 1 and Layer 2 are statistically tied** on alignment (+44.8 vs
+  +44.9 pp f_sel). Both dominate L=4 onward. L=10 gets only +17 pp.
+- **N=1 works.** A single memory entry reaches 94.8% f-selection while
+  *improving* op_acc by +1.5 pp. Strong evidence that the pretrained
+  model's $f$/$g$ preference is controlled by a near-linear direction
+  in layer-2 residual space.
+- **Memory beats LoRA at matched params.** 295K-param memory vs 295K
+  LoRA adapters: memory leads by ~1 pp f_sel, ~5 pp full_alignment,
+  ~5 pp op_acc.
+- **Full FT with $f$-override breaks arithmetic.** 30M-param model
+  updates on mixed data with overridden labels = -11 pp op_acc
+  (catastrophic forgetting). LoRA with same supervision stays stable.
+- **Mixed-pattern training generalizes.** Training on all coin-flip
+  patterns with $f$-override works on both ffff and mixed val. Training
+  on ffff-only fails on mixed val (off-path generalization gap).
+
+See `outputs/comparison_table.pdf` for full academic writeup.

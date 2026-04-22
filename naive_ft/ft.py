@@ -137,6 +137,8 @@ def main():
     ap.add_argument("--lr", type=float, required=True)
     ap.add_argument("--batch_size", type=int, default=4)
     ap.add_argument("--n_eval", type=int, default=200)
+    ap.add_argument("--ffff_val_file", default=None,
+                    help="Optional path to a dedicated ffff-only val JSON.")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--lora_rank", type=int, default=8)
     ap.add_argument("--lora_alpha", type=int, default=16)
@@ -198,11 +200,17 @@ def main():
     with open(MEM_DATA_DIR / "val.json") as f:
         val_all = json.load(f)
     train_examples = filter_data(train_all, data_filter)[:args.n_train]
-    val_fonly = [ex for ex in val_all
-                 if all(d == "f" for d in ex.get("decision_funcs", []))][:args.n_eval]
+    if args.ffff_val_file:
+        with open(args.ffff_val_file) as f:
+            val_fonly = json.load(f)[:args.n_eval]
+    else:
+        val_fonly = [ex for ex in val_all
+                     if all(d == "f" for d in ex.get("decision_funcs", []))][:args.n_eval]
     val_full = val_all[:args.n_eval]
     print(f"  train: {len(train_examples)}  (filter={data_filter})")
-    print(f"  val ffff: {len(val_fonly)}   val full: {len(val_full)}")
+    print(f"  val ffff: {len(val_fonly)}"
+          f"{' (from ' + args.ffff_val_file + ')' if args.ffff_val_file else ''}"
+          f"   val full: {len(val_full)}")
 
     print("Preparing training data...")
     train_ids, train_mask, train_labels, _ = prepare_training_data(
@@ -211,8 +219,14 @@ def main():
     )
 
     # ── Baseline (reuse memory_experiment's cache if present)
-    local_cache = RESULTS_DIR / f"_baseline_cache_n{args.n_eval}.json"
-    shared_cache = BASELINE_CACHE_SRC / f"_baseline_cache_n{args.n_eval}.json"
+    import hashlib
+    ffff_tag = ""
+    if args.ffff_val_file:
+        ffff_tag = "_" + hashlib.md5(
+            str(Path(args.ffff_val_file).resolve()).encode()
+        ).hexdigest()[:8]
+    local_cache = RESULTS_DIR / f"_baseline_cache_n{args.n_eval}{ffff_tag}.json"
+    shared_cache = BASELINE_CACHE_SRC / f"_baseline_cache_n{args.n_eval}{ffff_tag}.json"
     cache = None
     for c in (local_cache, shared_cache):
         if c.exists():
