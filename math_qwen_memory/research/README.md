@@ -25,6 +25,7 @@ Newer papers that update or override the 2023-2025 recommendations above.
 | 10 | [`10_2026_prm_and_critical_tokens.md`](10_2026_prm_and_critical_tokens.md) | 2026 PRMs & critical tokens | GenPRM/GRPO-as-PRM; **GTPO entropy-weighted GRPO** and **RISER vector-router** map directly onto our memory module |
 | 11 | [`11_2026_peft_and_qwen_recipes.md`](11_2026_peft_and_qwen_recipes.md) | 2026 PEFT & Qwen recipes | Qwen3.5/3.6 released Feb/Apr 2026; consensus r=α=32 all-linear DoRA+NF4 LR 2e-4; **DGPO/MathForge +2.18pt**, TROLL, GRPO-LEAD; OpenMathReasoning + SYNTHETIC-1 |
 | 12 | [`12_2026_reasoning_and_evaluation.md`](12_2026_reasoning_and_evaluation.md) | 2026 reasoning & eval | **math-verify upgrade ≈ +4.66pt** — must adopt; AIME/HMMT 2026 via MathArena; CGES replaces maj@16 (69% fewer calls); skip latent-CoT as a method |
+| 13 | [`13_local_memory_papers_review.md`](13_local_memory_papers_review.md) | Triage of 10 PDFs in `../memory_papers/` | **5 H-rated** (PKM+ResM 2020, LongMem 2023, Sparse Memory FT 2025, FwPKM Feb 2026, Engram Jan 2026); Engram shows MATH +2.4 / GSM8K +2.2 — headline target to match |
 
 ## Cross-doc themes
 
@@ -48,3 +49,5 @@ Phase 1 design doc (not yet written) should consolidate these into a concrete ar
 - Bias-only adaptation (Goncharov 2025) — strongest static-vector baseline
 - TinyLoRA-RL 13-params / 91% GSM8K — new minimum-param bar (09, 2026)
 - Vanilla LoRA all-linear r=32 DoRA (11, 2026 consensus recipe)
+- **Engram** (DeepSeek, Jan 2026, file 13) — MATH **+2.4** / GSM8K **+2.2** at 27B with conditional-memory module. If we can't match relative gains at 8B, method likely doesn't scale down.
+- **CAMELoT** training-free associative memory (file 13) — if our trained memory doesn't beat a zero-gradient control, learning isn't earning its keep.
