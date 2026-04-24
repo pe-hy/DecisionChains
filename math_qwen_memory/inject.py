@@ -126,7 +126,7 @@ def main():
     tok = AutoTokenizer.from_pretrained(MODEL_ID, cache_dir=str(HF_CACHE))
     model = AutoModelForCausalLM.from_pretrained(
         MODEL_ID, cache_dir=str(HF_CACHE),
-        dtype=torch.bfloat16,
+        torch_dtype=torch.bfloat16,
         device_map="cuda:0",
         attn_implementation="sdpa",
     )
