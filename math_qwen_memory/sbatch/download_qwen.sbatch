@@ -14,6 +14,7 @@
 # Run ONCE before submitting sbatch/inject.sbatch:
 #   sbatch sbatch/download_qwen.sbatch
 
+cd "$SLURM_SUBMIT_DIR"
 mkdir -p logs hf_cache
 export HF_HOME=./hf_cache
 export HF_HUB_CACHE=./hf_cache
