@@ -277,6 +277,44 @@ Training data is the harder bottleneck: $n{=}100$ plateaus near $26\%$
 full alignment; $n{\geq}1000$ crosses $80\%$; $n{=}3000$ saturates at
 $\sim 91\%$.
 
+\subsection{Where is the knee? (in-distribution view)}
+
+Table~\ref{tab:knee} fixes $L{=}2$, $N{=}32$ and varies $n_\text{train}$,
+reporting all four in-distribution (ffff val) metrics. This shows where
+training data starts paying off.
+
+\begin{table}[ht]
+  \centering\small
+  \caption{\textbf{ffff val metrics at $L{=}2$, $N{=}32$} across
+    $n_\text{train}$. \texttt{complete\_solution} (strictest: correct
+    arithmetic + valid letters + final vec matches GT output) is the
+    honest in-distribution metric. Baseline: f-sel $72.9$, full align
+    $59.0$, op.\ acc $94.8$, complete $72.0$ (all \%, $n_\text{eval}{=}200$).}
+  \label{tab:knee}
+  \renewcommand{\arraystretch}{1.1}
+  \begin{tabular}{rrrrr}
+    \toprule
+    $n_\text{train}$ & \textbf{f-sel} & \textbf{Full align} &
+    \textbf{Op.\ acc} & \textbf{Complete sol} \\
+    \midrule
+    100   & 86.2 & 64.5 & 96.7 & \textcolor{bad}{69.0} \\
+    1000  & 97.6 & 93.0 & 99.2 & 90.5 \\
+    2000  & 99.3 & 97.5 & 98.8 & 94.0 \\
+    3000  & 99.7$\pm$0.3 & 99.3$\pm$0.6 & 99.7$\pm$0.3 & \textbf{96.7$\pm$0.6} \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\textbf{Reading the knee.} At $n{=}100$, the memory under-trains: f-sel
+crosses baseline ($+13$\,pp) but \texttt{complete\_solution} actually
+drops below baseline ($-3$\,pp) — the small correction causes more
+arithmetic errors than it prevents letter errors. Between $n{=}100$ and
+$n{=}1000$ all metrics jump $\sim 20$\,pp. From $n{=}1000$ onward gains
+are logarithmic: $+4$\,pp on \texttt{complete\_solution} going to
+$n{=}2000$, then $+2.7$\,pp to $n{=}3000$. \textbf{The practical
+sweet-spot sits around $n{=}1000$--$2000$}; beyond that the in-distribution
+ceiling is already effectively reached.
+
 \subsection{Ingredient ablation}
 
 Table~\ref{tab:ingredients} ablates the recipe at $L{=}10$, $N{=}32$

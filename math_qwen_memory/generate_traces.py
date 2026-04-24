@@ -197,11 +197,14 @@ def generate(args):
 
     torch.manual_seed(args.seed)
 
+    shard_suffix = (
+        f"_shard{args.shard_idx}of{args.n_shards}" if args.n_shards > 1 else ""
+    )
     out_path = (
         Path(args.out)
         if args.out
         else ROOT / "outputs" / "pilot"
-        / f"{args.dataset}_{args.split}_n{args.n}.jsonl"
+        / f"{args.dataset}_{args.split}_n{args.n}{shard_suffix}.jsonl"
     )
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -217,12 +220,32 @@ def generate(args):
     model.eval()
     print(f"Loaded. VRAM: {torch.cuda.memory_allocated() / 1e9:.1f} GB")
 
-    examples = load_examples(args.dataset, args.n, args.split)
+    all_examples = load_examples(args.dataset, args.n, args.split)
+    # shard: keep indices where i % n_shards == shard_idx
+    examples = [
+        (i, ex) for i, ex in enumerate(all_examples)
+        if i % args.n_shards == args.shard_idx
+    ]
+    print(f"shard {args.shard_idx}/{args.n_shards}: {len(examples)} of "
+          f"{len(all_examples)} examples", flush=True)
 
-    # incremental save: open file now, flush after each record
-    out_f = open(out_path, "w")
+    # resume: skip indices already in the output file
+    done_idx = set()
+    if out_path.exists():
+        with open(out_path) as f:
+            for line in f:
+                try:
+                    done_idx.add(json.loads(line)["idx"])
+                except Exception:
+                    pass
+        if done_idx:
+            print(f"resuming — {len(done_idx)} already saved", flush=True)
+
+    out_f = open(out_path, "a")
     results = []
-    for idx, ex in enumerate(examples):
+    for pos, (idx, ex) in enumerate(examples):
+        if idx in done_idx:
+            continue
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": ex["problem"]},
@@ -273,7 +296,7 @@ def generate(args):
         os.fsync(out_f.fileno())
         mean_h = sum(entropies) / max(1, len(entropies))
         print(
-            f"[{idx + 1}/{len(examples)}] "
+            f"[{pos + 1}/{len(examples)}] idx={idx} "
             f"len={len(tokens)} meanH={mean_h:.2f} "
             f"pred={pred!r} gold={ex['gold']!r} correct={correct}",
             flush=True,
@@ -318,6 +341,8 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--rescore", default=None,
                     help="path to existing JSONL to re-grade in place")
+    ap.add_argument("--shard-idx", type=int, default=0)
+    ap.add_argument("--n-shards", type=int, default=1)
     args = ap.parse_args()
     if args.rescore:
         rescore(args.rescore)
