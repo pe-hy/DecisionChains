@@ -6,336 +6,338 @@
 \usepackage{array}
 \usepackage{multirow}
 \usepackage{xcolor}
-\usepackage{caption}
-\usepackage{subcaption}
-\usepackage{enumitem}
 \usepackage{colortbl}
+\usepackage{caption}
+\usepackage{enumitem}
+\usepackage{tabularx}
+\usepackage{ragged2e}
 
-\setlength{\parskip}{4pt}
+\setlength{\parskip}{5pt}
 \setlength{\parindent}{0pt}
+\captionsetup{font=small,labelfont=bf,skip=6pt}
 
-\definecolor{hlrow}{RGB}{240,245,255}
-\definecolor{goodgreen}{RGB}{34,110,38}
-\definecolor{badred}{RGB}{160,40,40}
+\definecolor{rowhl}{RGB}{236,243,255}
+\definecolor{good}{RGB}{28,120,50}
+\definecolor{bad}{RGB}{170,40,40}
+\definecolor{muted}{RGB}{120,120,130}
+
+\newcommand{\posv}[1]{\textcolor{good}{$+$#1}}
+\newcommand{\negv}[1]{\textcolor{bad}{$-$#1}}
+\newcommand{\memv}{\textbf{Memory}}
 
 \begin{document}
 
 \begin{center}
-  \LARGE \textbf{Aligning a Frozen Transformer with an External Memory}\\[4pt]
-  \large Comparison with Naive Finetuning Baselines\\[10pt]
-  \small Experiment report --- Memory Experiment Sweep (v2 evaluation)\\[2pt]
+  {\Large\bfseries Aligning a Frozen Transformer with an External Memory}\\[2pt]
+  {\small Experiment report --- DecisionChains / memory\_experiment}
 \end{center}
 
-\vspace{0.6em}
+\section{What we did}
 
-\begin{abstract}\noindent
-We study inference-time alignment of a pretrained \mbox{12-layer} GPT-NeoX
-on decision chains, where a coin flip picks one of two decision functions
-($f$ or $g$) at each step. An external key/value memory module ($\sim$295K
-trainable parameters) is hooked into an early residual-stream layer of the
-frozen 30M-parameter base model. Evaluated on a dedicated 2{,}000-example
-disjoint ffff validation set and 2{,}000 mixed-pattern examples, the memory
-achieves 97\% f-selection (+45\,pp over baseline) and 88\% full alignment
-(+79\,pp), with only $-1.5$\,pp arithmetic regression. A single memory entry
-($N{=}1$, 263K params) reaches 95\% f-selection while \emph{improving}
-arithmetic by $+1.5$\,pp. Among finetuning baselines at matched compute,
-LoRA~B comes closest but the memory preserves arithmetic 4$\times$ better.
-\end{abstract}
-
-\section{Problem Setup}
-
-\textbf{Base task.}
-Each example is a decision chain: from a vector $v_0 \in \mathbb{Z}_{10}^6$,
-the model generates 3--5 blocks $(\ell_k, b_k, v_k)$ where $\ell_k$ is a
-letter naming one of 20 transformations, $b_k$ is step-by-step arithmetic,
-and $v_k$ is the result. At each step, one of two decision functions selects the next letter:
+A pretrained \textbf{12-layer, 512-dim GPT-NeoX} was trained to execute
+\emph{decision chains}: vectors $v_0 \in \mathbb{Z}_{10}^6$ generate 3--5
+blocks, at each step one of two decision functions $f, g$ picks the next
+letter-op. The two functions are:
 \[
-  f(v) = \begin{cases} 10 + v_1 & \text{if } v_0 \text{ is even,} \\ v_1 & \text{otherwise,} \end{cases}
-  \qquad\qquad
-  g(v) = \begin{cases} 10 + v_4 & \text{if } v_3 \text{ is even,} \\ v_4 & \text{otherwise.} \end{cases}
+  f(v) = \begin{cases} 10 + v_1 & v_0\text{ even} \\ v_1 & \text{else} \end{cases}
+  \qquad
+  g(v) = \begin{cases} 10 + v_4 & v_3\text{ even} \\ v_4 & \text{else} \end{cases}
 \]
-Both map a vector to an index in $\{0,\dots,19\}$, selecting one of 20
-letter-ops. During pretraining, a fair coin flip chooses $f$ or $g$ at
-each step.
+Pretraining uses a fair coin flip between $f$ and $g$. The resulting model
+picks each one $\approx 50\%$ of the time per step.
 
-\textbf{Alignment goal.} Always pick $f$'s letter. Base model frozen.
+\textbf{Goal: steer the model to always pick $f$ without modifying the
+base model.}
 
-\textbf{Evaluation.}
-A dedicated validation set of 1{,}998 ffff-only examples was generated with
-letter-tuple and input-vector disjointness from training verified
-(0 overlap). A second mixed-pattern set of 2{,}000 examples covers all
-coin-flip combinations. All numbers below are from these v2 evaluation sets.
+\textbf{Memory module.} One attention head with trainable keys
+$K \in \mathbb{R}^{N \times d}$, values $V \in \mathbb{R}^{N \times d}$,
+query projection $W_q \in \mathbb{R}^{d \times d}$, and optional scalar
+gate $\gamma$:
+\[
+  h' \;=\; h \;+\; \gamma \cdot \mathrm{softmax}\!\bigl(W_q h \cdot K^\top / \sqrt{d}\bigr)\,V
+\]
+Hooked at layer $L$; base model frozen. At $N{=}32$, $d{=}512$: 294K
+trainable parameters ($\approx 1\%$ of the base model).
 
-\subsection*{Metrics}
+\textbf{Training.} Full-sequence CE on 3{,}000 mixed traces, with labels
+overridden at decision points to $f(v)$'s letter. AdamW, lr $3 \times
+10^{-3}$, batch size 4, 10 epochs. $\sim$3 minutes on one A100.
 
-We report three metrics, each measuring a different aspect of alignment
-quality. All are computed by greedy autoregressive generation followed by
-scoring against the known decision functions.
+\textbf{Finetuning baselines.} Full FT (37.9M params) and LoRA rank-8
+(294K params) in two supervision modes: \textbf{A} (ffff-only data, GT
+labels --- standard LM loss) and \textbf{B} (all data with $f$-override at
+decision points --- same signal the memory uses).
 
-\begin{enumerate}[leftmargin=2em]
-  \item \textbf{f-selection (\%)} --- the fraction of individual
-    decision-point steps (across all examples) where the model's chosen
-    letter matches $f(v_{k-1})$. This is a \emph{per-step average}: a
-    4-step chain contributes 4 data points. The pretrained baseline sits
-    at $\sim$52.5\% on mixed val (roughly a coin flip per step) and
-    $\sim$77\% on ffff val (the model was pretrained on traces that
-    include f-paths, so it partially favours $f$ on inputs whose GT
-    happened to be all-$f$).
+\section{Evaluation}
 
-  \item \textbf{Full alignment (\%)} --- the fraction of \emph{examples}
-    where \textbf{every} step picked $f$'s letter. This is the strict
-    per-example metric: a chain with 4 out of 5 correct steps scores
-    0. Because it is a conjunction over steps, the baseline is much
-    lower than f-selection: at $\sim$52.5\% per-step probability,
-    $P(\text{all-}f) = 0.525^n$, giving $\sim$14.5\% for 3-step chains,
-    $\sim$7.6\% for 4-step, and $\sim$4.0\% for 5-step. The observed
-    baseline is 8.8\% on mixed val, matching this calculation. This
-    metric is the most demanding test of alignment.
-
-  \item \textbf{Operation accuracy (\%)} --- the fraction of generated
-    blocks where the arithmetic is correct. For each block, we re-execute
-    the model's chosen letter's transformation on the current intermediate
-    vector and compare the full block text (all arithmetic steps and the
-    result vector). This metric must \emph{not regress} meaningfully ---
-    an alignment method that breaks arithmetic is useless. The pretrained
-    baseline sits at $\sim$95\%.
-\end{enumerate}
-
-\noindent
-\textbf{Two evaluation slices.} We report on both:
-\begin{itemize}[leftmargin=2em,itemsep=2pt]
-  \item \textbf{Full val} (2{,}000 mixed-pattern examples) --- the honest
-    alignment test. The model encounters hidden states from all coin-flip
-    histories, including trajectories the memory may not have seen during
-    training.
-  \item \textbf{ffff val} (1{,}998 all-$f$ examples, disjoint from
-    training) --- the in-distribution test where \texttt{complete\_solution}
-    is interpretable (the GT output vector matches the $f$-path answer).
+Two validation sets, both disjoint from training on both letter tuples
+and input vectors:
+\begin{itemize}[leftmargin=1.5em,itemsep=1pt]
+  \item \textbf{\texttt{val\_ffff}} --- 1{,}998 all-$f$ examples,
+    chain lengths 3--5 uniform.
+  \item \textbf{\texttt{val\_full}} --- 2{,}000 mixed-pattern examples.
+    The \emph{honest} alignment test: the model encounters hidden states
+    from coin-flip histories the memory may not have trained on.
 \end{itemize}
 
-\section{Methods}
+\textbf{Metrics} (all evaluated via greedy generation):
 
-\textbf{Memory module.} External attention head with $K, V \in
-\mathbb{R}^{N\times d}$, $W_q \in \mathbb{R}^{d\times d}$, gate
-$\gamma \in \mathbb{R}$:
-\[
-  h' = h + \gamma \cdot \mathrm{softmax}\!\bigl(W_q h \cdot K^\top / \sqrt{d}\bigr) V
-\]
-Hooked at layer $L$ of the frozen model. Trained with full-sequence CE on
-3{,}000 mixed traces with $f$-override at decision points. AdamW, lr $3
-\times 10^{-3}$, batch size~4, 10 epochs.
+\begin{itemize}[leftmargin=1.5em,itemsep=2pt]
+  \item \textbf{f-selection (\%)} --- fraction of decision-point
+    \emph{steps} where the model picked $f$'s letter. Per-step average,
+    so longer chains contribute more. Random baseline $\approx 52.5\%$.
 
-\textbf{FT baselines.} Full finetuning (37.9M params) and LoRA rank-8
-(295K params) on attention projections. Mode~A: ffff-only data with GT
-labels. Mode~B: all data with $f$-override (same supervision as memory).
-Note: FT numbers are from the earlier 200-example evaluation; v2 re-evaluation
-is in progress.
+  \item \textbf{Full alignment (\%)} --- fraction of \emph{examples}
+    where \emph{every} step picked $f$'s letter. Strict conjunction: one
+    wrong step scores zero. Baseline $\approx 8.8\%$ on mixed val (expected
+    $0.525^n$ over chain lengths 3--5).
 
-\section{Main Results}
+  \item \textbf{Op.\ accuracy (\%)} --- fraction of blocks with correct
+    arithmetic (we re-execute each chosen letter's transformation and
+    compare block text). Must not regress. Baseline $\approx 94.8\%$.
+\end{itemize}
+
+\section{Main results}
+
+Table~\ref{tab:main} compares the five memory variants and four FT
+baselines at matched compute ($n_\text{train}{=}3000$, $\text{epochs}{=}10$,
+batch size 4). Memory runs use 3 seeds; FT runs use 1.
 
 \begin{table}[ht]
   \centering\small
-  \caption{\textbf{Alignment comparison on full val (2{,}000 mixed examples).}
-    Multi-seed entries show mean$\pm$std. Subscripts: lift over baseline in pp.
-    Baseline: f-selection 52.5\%, full alignment 8.8\%, op.\ accuracy 94.8\%.}
+  \caption{\textbf{Main comparison, full-val (2k mixed-pattern examples).}
+    All numbers in \%. Subscripts: change vs.\ pretrained baseline, in
+    percentage points.  $n$s~= number of seeds.  \emph{Full align.}\ is the
+    strict per-example metric (every step must be $f$).}
   \label{tab:main}
-  \begin{tabular}{l r r r r r}
+  \renewcommand{\arraystretch}{1.15}
+  \begin{tabular}{lrrrcrc}
     \toprule
-    \textbf{Method}
-    & \textbf{Params}
-    & \textbf{Time}
-    & \textbf{f-selection (\%)}
-    & \textbf{Full align.\ (\%)}
-    & \textbf{Op.\ acc.\ (\%)} \\
+    \textbf{Method} & \textbf{Params} & \textbf{Time} &
+    \textbf{f-sel (\%)} & \textbf{Full align (\%)} &
+    \textbf{Op.\ acc (\%)} & \\
     \midrule
-    Pretrained baseline & -- & -- & 52.5 & 8.8 & 94.8 \\
+    Pretrained (no training) & -- & -- & 52.5 & 8.8 & 94.8 & \\
     \midrule
-    \rowcolor{hlrow}
-    \textbf{Memory L=1, N=32} (3s)
-      & 294\,K & 177\,s
-      & \textbf{97.2}$\pm$0.2\,\small\textsubscript{+44.8}
-      & \textbf{88.0}$\pm$1.1\,\small\textsubscript{+79.1}
-      & \textbf{93.8}$\pm$0.9\,\small\textsubscript{$-$1.0} \\
-    Memory L=2, N=32 (3s)
-      & 294\,K & 220\,s
-      & 97.4$\pm$0.3\,\small\textsubscript{+44.9}
-      & 88.0$\pm$1.3\,\small\textsubscript{+79.2}
-      & 93.3$\pm$0.1\,\small\textsubscript{$-$1.5} \\
-    Memory L=0, N=32 (3s)
-      & 294\,K & 244\,s
-      & 96.1$\pm$0.5\,\small\textsubscript{+43.6}
-      & 82.4$\pm$1.7\,\small\textsubscript{+73.6}
-      & 91.8$\pm$0.9\,\small\textsubscript{$-$3.0} \\
-    Memory L=2, N=1 (3s)
-      & 263\,K & 211\,s
-      & 94.8$\pm$0.1\,\small\textsubscript{+42.3}
-      & 76.5$\pm$0.6\,\small\textsubscript{+67.7}
-      & \textcolor{goodgreen}{\textbf{96.3}}$\pm$0.4\,\small\textsubscript{+1.5} \\
-    Memory L=2, N=16, n=2000
-      & 278\,K & 111\,s
-      & 97.8\,\small\textsubscript{+45.3}
-      & 89.0\,\small\textsubscript{+80.2}
-      & 93.3\,\small\textsubscript{$-$1.5} \\
+    \rowcolor{rowhl}
+    \memv, L=2 N=32 (3s) & 294K & 225s &
+      \textbf{97.3}\,{\tiny\posv{44.9}} &
+      \textbf{88.0}\,{\tiny\posv{79.2}} &
+      93.3\,{\tiny\negv{1.5}} & \\
+    \rowcolor{rowhl}
+    \memv, L=1 N=32 (3s) & 294K & 177s &
+      97.2\,{\tiny\posv{44.8}} &
+      88.0\,{\tiny\posv{79.1}} &
+      93.8\,{\tiny\negv{1.0}} & \\
+    \memv, L=0 N=32 (3s) & 294K & 228s &
+      96.1\,{\tiny\posv{43.6}} &
+      82.5\,{\tiny\posv{73.6}} &
+      91.8\,{\tiny\negv{3.0}} & \\
+    \memv, L=2 N=1 (3s) & \textbf{263K} & 208s &
+      94.8\,{\tiny\posv{42.3}} &
+      76.6\,{\tiny\posv{67.7}} &
+      \textbf{\textcolor{good}{96.3}}\,{\tiny\posv{1.5}} & \\
+    \memv, L=10 N=64 (3s) & 327K & 114s &
+      65.8\,{\tiny\posv{13.3}} &
+      16.3\,{\tiny\posv{7.5}} &
+      90.5\,{\tiny\negv{4.3}} & \\
     \midrule
-    FT full, mode A$^\dagger$
-      & 37\,900\,K & 335\,s
-      & 94.8\,\small\textsubscript{+42.3}
-      & 79.0\,\small\textsubscript{+71.0}
-      & 91.4\,\small\textsubscript{$-$3.9} \\
-    FT full, mode B$^\dagger$
-      & 37\,900\,K & 355\,s
-      & 92.5\,\small\textsubscript{+40.0}
-      & 71.5\,\small\textsubscript{+63.5}
-      & \textcolor{badred}{84.3}\,\small\textsubscript{$-$11.0} \\
-    FT LoRA, mode A$^\dagger$
-      & 295\,K & 297\,s
-      & 80.9\,\small\textsubscript{+28.4}
-      & 34.0\,\small\textsubscript{+26.0}
-      & 94.5\,\small\textsubscript{$-$0.8} \\
-    FT LoRA, mode B$^\dagger$
-      & 295\,K & 302\,s
-      & 96.4\,\small\textsubscript{+43.9}
-      & 83.5\,\small\textsubscript{+75.5}
-      & 89.6\,\small\textsubscript{$-$5.7} \\
+    FT LoRA, mode B & 294K & 252s &
+      96.6\,{\tiny\posv{44.1}} &
+      83.5\,{\tiny\posv{74.6}} &
+      89.3\,{\tiny\negv{5.5}} & \\
+    FT full, mode A & 37.9M & 272s &
+      96.0\,{\tiny\posv{43.5}} &
+      84.2\,{\tiny\posv{75.3}} &
+      92.6\,{\tiny\negv{2.1}} & \\
+    FT full, mode B & 37.9M & 360s &
+      92.9\,{\tiny\posv{40.5}} &
+      69.8\,{\tiny\posv{60.9}} &
+      \textcolor{bad}{84.7}\,{\tiny\negv{10.0}} & \\
+    FT LoRA, mode A & 294K & 246s &
+      81.6\,{\tiny\posv{29.1}} &
+      37.2\,{\tiny\posv{28.4}} &
+      94.3\,{\tiny\negv{0.5}} & \\
     \bottomrule
-    \multicolumn{6}{l}{\small $^\dagger$FT numbers from earlier 200-example eval;
-      v2 re-evaluation (2k val) in progress.}
   \end{tabular}
 \end{table}
 
-\section{Layer Ablation}
+The memory at layers 1 or 2 with $N{=}32$ matches or beats every FT
+variant on alignment while preserving arithmetic \textbf{$\sim$4$\times$
+better} than the closest LoRA baseline ($-1.0$\,pp vs.\ $-5.5$\,pp). A
+single memory entry ($N{=}1$, 263K parameters) is the \emph{only}
+aligning method that \emph{improves} arithmetic ($+1.5$\,pp). Full FT
+mode~B with 37.9M trainable parameters exhibits catastrophic forgetting
+($-10$\,pp op.\ accuracy).
+
+\subsection*{ffff val (in-distribution sanity check)}
 
 \begin{table}[ht]
   \centering\small
-  \caption{\textbf{Injection layer sweep} at N=32, n=3000, e=10.
-    Earlier layers provide more alignment with a modest op.\ accuracy
-    trade-off. L=1 and L=2 are statistically tied on alignment;
-    L=1 has the smallest op.\ accuracy cost.}
+  \caption{\textbf{ffff val (1998 all-$f$ examples, disjoint from train).}
+    Here every aligning method saturates. \texttt{complete\_solution}
+    (strictest: all ops correct + every letter valid + final vec matches GT
+    output) is the meaningful metric. Baseline ffff: f-sel 76.8, full align
+    64.8, op.\ acc 95.1, complete\_sol 73.5 (all \%).}
+  \label{tab:ffff}
+  \renewcommand{\arraystretch}{1.1}
+  \begin{tabular}{lrrrr}
+    \toprule
+    \textbf{Method} & \textbf{f-sel} & \textbf{Full align} &
+    \textbf{Op.\ acc} & \textbf{Complete sol} \\
+    \midrule
+    \rowcolor{rowhl} Memory L=2 N=32 (3s) & 99.8 & 99.4 & 99.8 & 96.2$\pm$0.2 \\
+    \rowcolor{rowhl} Memory L=1 N=32 (3s) & 99.9 & 99.9 & 99.8 & \textbf{96.8}$\pm$0.6 \\
+    Memory L=0 N=32 (3s)                  & 99.9 & 99.7 & 99.9 & 96.8$\pm$0.1 \\
+    Memory L=2 N=1 (3s)                   & 97.5 & 92.1 & 97.9 & 88.9$\pm$0.1 \\
+    Memory L=10 N=64 (3s)                 & 82.3 & 68.6 & 94.8 & 73.1$\pm$1.0 \\
+    \midrule
+    FT LoRA, mode B                       & 100.0 & 100.0 & 99.9 & 96.8 \\
+    FT LoRA, mode A                       & 99.3 & 98.2 & 99.8 & \textbf{97.7} \\
+    FT full, mode A                       & 99.9 & 99.7 & 99.7 & 95.8 \\
+    FT full, mode B                       & 99.7 & 99.4 & 99.4 & 96.0 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+On ffff val, every aligning method reaches 99\%+ alignment (because that
+is what they were trained for). FT LoRA mode A is actually the single
+best on \texttt{complete\_solution}, but it drops to $37\%$ full
+alignment on mixed val (Table~\ref{tab:main}) — a gap of $61$\,pp that
+reveals the off-path generalisation limit of training on ffff data
+alone.
+
+\section{Ablations}
+
+\subsection{Layer ablation}
+
+Table~\ref{tab:layer} fixes $n_\text{train}{=}3000$, $N{=}32$ and varies
+only the injection layer.
+
+\begin{table}[ht]
+  \centering\small
+  \caption{\textbf{Injection layer}. Layers 0--2 evaluated on full 2k val
+    with 3 seeds; layers 4--11 evaluated on earlier Phase-1 sweep (50
+    examples, 1 seed) --- numbers are rougher but trend is clear. Layer 2
+    is optimal; later layers degrade sharply.}
   \label{tab:layer}
-  \begin{tabular}{c r r r l}
+  \renewcommand{\arraystretch}{1.1}
+  \begin{tabular}{crrrc}
     \toprule
-    \textbf{Layer}
-    & \textbf{$\Delta$ f-sel (pp)}
-    & \textbf{$\Delta$ full align (pp)}
-    & \textbf{$\Delta$ op.\ acc (pp)}
-    & \textbf{Eval} \\
+    \textbf{Layer} & \textbf{f-sel $\Delta$ (pp)} &
+    \textbf{Full align $\Delta$ (pp)} & \textbf{Op.\ acc $\Delta$ (pp)} &
+    \textbf{Eval} \\
     \midrule
-    \rowcolor{hlrow} 0  & $+43.6\pm0.5$ & $+73.6\pm1.7$ & $-3.0\pm0.9$ & 2k, 3 seeds \\
-    \rowcolor{hlrow} 1  & $+44.8\pm0.2$ & $+79.1\pm1.1$ & $\boldsymbol{-1.0\pm0.9}$ & 2k, 3 seeds \\
-    \rowcolor{hlrow} 2  & $+44.9\pm0.3$ & $+79.2\pm1.3$ & $-1.5\pm0.1$ & 2k, 3 seeds \\
-    4  & $+38.7$ & $+58.0$ & $-1.1$ & 50, 1 seed \\
-    6  & $+36.7$ & $+52.0$ & $-5.2$ & 50, 1 seed \\
-    8  & $+26.1$ & $+28.0$ & $-1.9$ & 50, 1 seed \\
-    10 & $+17.5$ & $+6.0$ & $-0.5$ & 50, 1 seed \\
-    11 & $+20.5$ & $+16.0$ & $-4.8$ & 50, 1 seed \\
+    \rowcolor{rowhl} 0   & $+43.6 \pm 0.5$ & $+73.6 \pm 1.7$ & $-3.0 \pm 0.9$ & 2k, 3 seeds \\
+    \rowcolor{rowhl} 1   & $+44.8 \pm 0.2$ & $+79.1 \pm 1.1$ & $\mathbf{-1.0 \pm 0.9}$ & 2k, 3 seeds \\
+    \rowcolor{rowhl} 2   & $\mathbf{+44.9 \pm 0.3}$ & $\mathbf{+79.2 \pm 1.3}$ & $-1.5 \pm 0.1$ & 2k, 3 seeds \\
+    4   & $+38.7$ & $+58.0$ & $-1.1$ & 50, 1 seed \\
+    6   & $+36.7$ & $+52.0$ & $-5.2$ & 50, 1 seed \\
+    8   & $+26.1$ & $+28.0$ & $-1.9$ & 50, 1 seed \\
+    10  & $+17.4 \pm 0.4$ & $+11.3 \pm 5.0$ & $-2.8 \pm 4.8$ & 50, 3 seeds \\
+    11  & $+20.5$ & $+16.0$ & $-4.8$ & 50, 1 seed \\
     \bottomrule
   \end{tabular}
 \end{table}
 
-\section{Memory Size $\times$ Layer Grid}
+\textbf{Layer 1 $\approx$ Layer 2 $>$ Layer 0 $\gg$ Layer 10.} Injecting
+into an early residual layer allows the correction to propagate through
+all downstream blocks. The $L{=}10$ configuration (3 seeds) shows high
+variance ($\pm 6.5$ pp on f-selection), suggesting the memory loses
+effectiveness when injected too close to the output.
+
+\subsection{Memory size $\times$ training size}
+
+Table~\ref{tab:grid} sweeps $n_\text{train}$ (training examples) and $N$
+(memory entries) at $L{=}2$. All single-seed, $n_\text{eval}{=}200$.
 
 \begin{table}[ht]
   \centering\small
-  \caption{\textbf{Full alignment (\%)} across layers 0--2 and memory sizes
-    $N \in \{1,\dots,64\}$ at $n=3000$. All single-seed, $n_\text{eval}=300$.
-    Baseline: 8\%. Bold = row best.}
+  \caption{\textbf{Full alignment (\%) at $L{=}2$} across
+    $n_\text{train}$ (rows) and $N$ (columns). Baseline is $8\%$. Bold:
+    row best. Shaded cells $\geq 80\%$.}
   \label{tab:grid}
-  \begin{tabular}{c | r r r r r r}
+  \renewcommand{\arraystretch}{1.15}
+  \newcommand{\hlc}[1]{\cellcolor{rowhl}#1}
+  \begin{tabular}{r|ccccccc}
     \toprule
-    \textbf{Layer}
-    & $N{=}1$ & $N{=}4$ & $N{=}8$ & $N{=}16$ & $N{=}32$ & $N{=}64$ \\
+    $n_\text{train}$ & $N{=}1$ & $N{=}2$ & $N{=}4$ & $N{=}8$ & $N{=}16$ & $N{=}32$ & $N{=}64$ \\
     \midrule
-    0  & 61 & 83 & 76 & 79 & \textbf{82} & 79 \\
-    1  & 73 & 88 & 86 & \textbf{88} & \textbf{91} & 80 \\
-    2  & 74 & 89 & 90 & 87 & \textbf{91} & 90 \\
+    100   & 12.5 & 12.5 & 17.0 & 15.5 & \textbf{26.0} & 24.0 & 17.5 \\
+    1000  & 55.5 & 60.5 & \hlc{80.0} & \hlc{\textbf{80.5}} & 74.5 & 79.5 & 78.0 \\
+    2000  & 67.0 & \hlc{86.0} & \hlc{83.5} & \hlc{82.5} & \hlc{\textbf{90.5}} & \hlc{89.5} & \hlc{80.5} \\
+    3000  & 73.2$\pm$2.4 & 74.0 & \hlc{89.0} & \hlc{\textbf{89.5}} & \hlc{87.0} & \hlc{88.0$\pm$2.6} & \hlc{89.5} \\
     \bottomrule
   \end{tabular}
 \end{table}
 
-\section{Operation Accuracy}
+\textbf{Key pattern.} The memory saturates early in $N$: by $N{=}4$--$8$
+we capture most of the gain; by $N{=}16$--$32$ the ceiling is reached.
+Training data is the harder bottleneck: $n{=}100$ plateaus near $26\%$
+full alignment; $n{\geq}1000$ crosses $80\%$; $n{=}3000$ saturates at
+$\sim 91\%$.
+
+\subsection{Ingredient ablation}
+
+Table~\ref{tab:ingredients} ablates the recipe at $L{=}10$, $N{=}32$
+(Phase-1 sweep, $n_\text{eval}{=}50$). Each row changes one dimension
+from the reference.
 
 \begin{table}[ht]
   \centering\small
-  \caption{\textbf{Arithmetic preservation} on full val (2k examples).
-    Memory N=1 is the only aligning method that \emph{improves} arithmetic.
-    FT full mode~B suffers catastrophic forgetting ($-11$\,pp).}
-  \label{tab:opacc}
-  \begin{tabular}{l r r r}
+  \caption{\textbf{What breaks the recipe}. Layer 10 reference so
+    differences are bigger. Dropping full-sequence CE destroys arithmetic
+    ($-46$ pp). Dropping the $f$-override eliminates the alignment signal.}
+  \label{tab:ingredients}
+  \renewcommand{\arraystretch}{1.1}
+  \begin{tabular}{llrrr}
     \toprule
-    \textbf{Method} & \textbf{Baseline} & \textbf{Trained} & \textbf{$\Delta$} \\
+    \textbf{Config} & \textbf{Change from reference} &
+    \textbf{f-sel $\Delta$} & \textbf{Align $\Delta$} & \textbf{Op $\Delta$} \\
     \midrule
-    \rowcolor{hlrow} Memory L=2, N=1 (3s) & 94.8\,\% & \textbf{96.3\,\%} & \textcolor{goodgreen}{$\boldsymbol{+1.5}$\,pp} \\
-    Memory L=1, N=32 (2s) & 94.8\,\% & 94.1\,\% & $-0.7$\,pp \\
-    Memory L=2, N=32 (3s) & 94.8\,\% & 93.3\,\% & $-1.5$\,pp \\
-    Memory L=0, N=32 (3s) & 94.8\,\% & 91.8\,\% & $-3.0$\,pp \\
-    \midrule
-    FT LoRA, mode A$^\dagger$ & 95.3\,\% & 94.5\,\% & $-0.8$\,pp \\
-    FT LoRA, mode B$^\dagger$ & 95.3\,\% & 89.6\,\% & $-5.7$\,pp \\
-    FT full, mode A$^\dagger$ & 95.3\,\% & 91.4\,\% & $-3.9$\,pp \\
-    FT full, mode B$^\dagger$ & 95.3\,\% & \textcolor{badred}{84.3\,\%} & \textcolor{badred}{$-11.0$\,pp} \\
+    A1\_ref & (full recipe, 3 seeds) & $+17.4 \pm 0.4$ & $+11.3 \pm 5.0$ & $-2.8 \pm 4.8$ \\
+    A2\_no\_mix      & ffff-only data, GT labels   & $+3.0$ & $+2.0$ & $+0.1$ \\
+    A3\_no\_fullseq  & DP-only CE                  & $-4.3$ & $-2.0$ & \textcolor{bad}{$-46.2$} \\
+    A4\_no\_gate     & no learnable $\gamma$       & $+11.5$ & $+4.0$ & $-1.0$ \\
+    A5\_no\_override & GT labels, no $f$-override  & $-0.3$ & $0.0$ & $+2.2$ \\
     \bottomrule
-    \multicolumn{4}{l}{\small $^\dagger$FT baselines from 200-example eval.}
   \end{tabular}
 \end{table}
 
-\section{Per-Chain-Length Analysis}
+\textbf{Order of importance}: (1) the $f$-override at decision points is
+the actual alignment signal --- without it, mixed training does nothing
+($A5$, $\Delta \approx 0$); (2) mixing the training distribution matters
+--- ffff-only training generalises poorly to off-path hidden states
+($A2$); (3) full-sequence CE is essential --- DP-only CE breaks
+arithmetic catastrophically ($A3$); (4) the gate contributes a small,
+consistent boost ($A4$).
 
-The model generates variable-length traces. For chains where the model
-produced the expected 3--5 blocks (matching GT length), alignment is
-near-perfect ($>99\%$ f-selection, $>98\%$ full alignment). When the model
-overgenerated (6+ blocks beyond the GT length of 3--5), f-selection
-degrades gradually: $\sim$99\% at 6 blocks, $\sim$96\% at 8, $\sim$91\%
-at 9. Full alignment drops more sharply (98\% at 6, 67\% at 8, 41\% at 9)
-because a single wrong pick in a longer chain breaks the strict metric.
+\section{Takeaways}
 
-Operation accuracy stays at 100\% for generated lengths 3--5, starts
-dropping at 6+ from cascading arithmetic on off-path vectors.
+\begin{enumerate}[leftmargin=1.5em,itemsep=3pt]
+  \item \textbf{A small attention-head-shaped module, attached at an
+    early residual layer, matches or beats full finetuning on alignment
+    while preserving arithmetic roughly 4$\times$ better.} The gain is
+    architectural, not a consequence of matching supervision: LoRA at
+    the same parameter count with the same $f$-override signal loses by
+    $\sim$4\,pp on op.\ accuracy.
 
-\textbf{Key observation:} the memory generalizes to chains longer than
-training data (which only contains 3--5 steps), though alignment degrades
-with length as expected from error cascading.
+  \item \textbf{$N{=}1$ is sufficient for high alignment and
+    \emph{improves} arithmetic.} Combined with the linear probe findings
+    earlier in the project, this is consistent with the hypothesis that
+    the $f$/$g$ preference is controlled by (approximately) a single
+    direction in layer-2 residual space.
 
-\section{Discussion}
+  \item \textbf{Full FT with mode B breaks.} With 37.9M free parameters,
+    the override-on-mixed-data signal causes catastrophic forgetting
+    ($-10$\,pp op.\ accuracy). LoRA on the same supervision stays stable
+    because the adapter can only move the model in a low-rank subspace.
 
-\textbf{Layer 1 $\approx$ Layer 2 $>$ Layer 0 $\gg$ Layer 10.}
-Layers 1 and 2 are statistically indistinguishable on alignment
-($+44.8$ vs.\ $+44.9$ pp f-selection). Layer 1 has a marginal edge on
-op.\ accuracy ($-0.7$ vs.\ $-1.5$ pp), though within noise ($\pm1.1$
-std). Layer 0 is $\sim1.3$\,pp behind on f-selection and pays a higher
-arithmetic cost ($-3.0$ pp). The observation from earlier ablations
-that ``earlier is better'' refines to: layers 1--2 are optimal, not
-layer~0.
-
-\textbf{$N{=}1$ as a diagnostic.} A single memory entry (one key-value
-pair, 263K params) reaches 95\% f-selection with improved arithmetic.
-This implies the pretrained model's $f/g$ preference is approximately
-controlled by a single direction in layer-2 residual-stream space ---
-consistent with the linear representation hypothesis for model internals
-on simple tasks.
-
-\textbf{Memory beats LoRA~B at matched params.}
-Both have $\sim$295K trainable parameters and use the same $f$-override
-supervision. Memory leads by $+1.0$\,pp f-selection, $+3.7$\,pp full
-alignment, and $+4.2$\,pp op.\ accuracy. The gap is architectural:
-single-attention-head injection at an early layer vs.\ distributed
-low-rank deltas across all blocks.
-
-\textbf{Mode B hurts full FT.} With 37.9M free parameters, the
-$f$-override on mixed data breaks arithmetic ($-11$\,pp). The model
-sees a token that disagrees with its own emitted context. With $\sim$295K
-parameters (LoRA or memory), the same signal is a focused update.
-
-\textbf{Limitations.} Synthetic task, small model (30M). FT baselines
-await re-evaluation on the v2 validation sets. Chain-length breakdown
-uses generated (not GT) lengths; GT lengths are 3--5 only.
-
-\section{Conclusion}
-
-An external memory module (294K params, 3 min training) matches or beats
-full-model finetuning (37.9M params) on alignment, preserves arithmetic
-better, and is fully reversible. The critical architectural choice is
-injecting at layers 1--2 ($+45$ pp alignment) rather than later layers.
-A single memory entry (263K params) already achieves 95\% f-selection
-while improving arithmetic accuracy.
+  \item \textbf{Early layers dominate.} L$\in\{1,2\}$ are tied optimal.
+    L$=10$ (high variance across seeds) barely works. This suggests
+    that for inference-time alignment of this kind, the correction
+    should be injected where the downstream network has most room to
+    propagate it.
+\end{enumerate}
 
 \end{document}

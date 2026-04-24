@@ -1,0 +1,1 @@
+použít claude -p no permission ask a dej mu prompt s tím aby to identifikoval

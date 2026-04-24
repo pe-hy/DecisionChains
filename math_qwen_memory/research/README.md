@@ -26,6 +26,8 @@ Newer papers that update or override the 2023-2025 recommendations above.
 | 11 | [`11_2026_peft_and_qwen_recipes.md`](11_2026_peft_and_qwen_recipes.md) | 2026 PEFT & Qwen recipes | Qwen3.5/3.6 released Feb/Apr 2026; consensus r=α=32 all-linear DoRA+NF4 LR 2e-4; **DGPO/MathForge +2.18pt**, TROLL, GRPO-LEAD; OpenMathReasoning + SYNTHETIC-1 |
 | 12 | [`12_2026_reasoning_and_evaluation.md`](12_2026_reasoning_and_evaluation.md) | 2026 reasoning & eval | **math-verify upgrade ≈ +4.66pt** — must adopt; AIME/HMMT 2026 via MathArena; CGES replaces maj@16 (69% fewer calls); skip latent-CoT as a method |
 | 13 | [`13_local_memory_papers_review.md`](13_local_memory_papers_review.md) | Triage of 10 PDFs in `../memory_papers/` | **5 H-rated** (PKM+ResM 2020, LongMem 2023, Sparse Memory FT 2025, FwPKM Feb 2026, Engram Jan 2026); Engram shows MATH +2.4 / GSM8K +2.2 — headline target to match |
+| 14 | [`14_entropy_teacher_memory_design.md`](14_entropy_teacher_memory_design.md) | **Phase-1 design doc**: entropy-gated teacher queries → distill into KV memory | Defensible novelty: combination of entropy-gate (Wang 2025), teacher distillation (EOPD 2026), and frozen-backbone memory (Engram 2026) not done as single paper. Min-viable scope: Qwen3-72B teacher, 2.2M-param bottleneck memory, L=18, 20% entropy gate |
+| 15 | [`15_pilot_claude_advice_validation.md`](15_pilot_claude_advice_validation.md) | **Pilot spec**: run Qwen3 on ~40 problems, ask Claude to mark advice points, compare to entropy | ~$1.50 Claude API + one afternoon. Validates whether entropy aligns with semantic "where would a teacher step in", before committing to full `research/14` pipeline |
 
 ## Cross-doc themes
 
