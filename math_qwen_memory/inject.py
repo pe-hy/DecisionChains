@@ -35,12 +35,15 @@ from generate_traces import (  # noqa: E402
 )
 
 
-def build_prefill(tok, problem: str, think_text: str,
-                  span_start: int, pseudo_code: str):
+def build_prefill(tok, problem: str, prefix_body: str,
+                  pseudo_code: str, prepend_think_tag: bool):
     """Return (prefill_text, injection_text, input_ids).
 
-    Qwen3-8B template with enable_thinking=True DOES NOT emit <think>;
-    we add it explicitly. Verified via template inspection + HF blog.
+    `prefix_body` is the slice of think/generation BEFORE the span.
+    If `prepend_think_tag`, we add "<think>\\n" first (closed-think path:
+    aligned think_text does not include the tag).
+    Otherwise, prefix_body already starts with "<think>" (unclosed-think
+    path: we slice raw generation that includes the opening tag).
     """
     import torch  # noqa
     messages = [
@@ -52,29 +55,34 @@ def build_prefill(tok, problem: str, think_text: str,
         enable_thinking=True, tokenize=False,
     )
     injection = f"\n```\n{pseudo_code.strip()}\n```\n"
-    prefill = (
-        header
-        + "<think>\n"
-        + think_text[:span_start]
-        + injection
-    )
+    head_tag = "<think>\n" if prepend_think_tag else ""
+    prefill = header + head_tag + prefix_body + injection
     input_ids = tok(prefill, add_special_tokens=False,
                     return_tensors="pt").input_ids
     return prefill, injection, input_ids
 
 
 def iter_tasks(aligned_path: Path, max_examples: int | None):
-    """Yield (ex_idx, algo_idx, algo, span_idx, span, record) for in-think spans."""
+    """Yield (ex_idx, algo_idx, algo, span_idx, span, record, mode).
+
+    mode='closed': aligned has a closed think block; use think_text[:start_think].
+    mode='unclosed': aligned has no think block but baseline gen starts with
+        '<think>' and was truncated mid-think; use generation[:start_gen].
+    """
     with open(aligned_path) as f:
         for ex_idx, line in enumerate(f):
             if max_examples is not None and ex_idx >= max_examples:
                 break
             rec = json.loads(line)
+            think = rec.get("think")
+            gen = rec.get("generation", "")
+            unclosed = think is None and "<think>" in gen and "</think>" not in gen
             for algo_idx, algo in enumerate(rec["algorithms"]):
                 for span_idx, span in enumerate(algo["spans"]):
-                    if span.get("start_think") is None:
-                        continue
-                    yield ex_idx, algo_idx, algo, span_idx, span, rec
+                    if span.get("start_think") is not None:
+                        yield ex_idx, algo_idx, algo, span_idx, span, rec, "closed"
+                    elif unclosed and span.get("start_gen") is not None:
+                        yield ex_idx, algo_idx, algo, span_idx, span, rec, "unclosed"
 
 
 def already_done(out_path: Path) -> set:
@@ -106,6 +114,8 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--shard-idx", type=int, default=0)
     ap.add_argument("--n-shards", type=int, default=1)
+    ap.add_argument("--only-mode", choices=["closed", "unclosed", "all"],
+                    default="all", help="filter to one span mode only")
     args = ap.parse_args()
 
     aligned_path = Path(args.aligned)
@@ -147,6 +157,8 @@ def main():
     out_f = open(out_path, "a")
 
     all_tasks = list(iter_tasks(aligned_path, args.max_examples))
+    if args.only_mode != "all":
+        all_tasks = [t for t in all_tasks if t[6] == args.only_mode]
     # round-robin shard by global task index
     tasks = [
         t for i, t in enumerate(all_tasks)
@@ -157,18 +169,24 @@ def main():
           f"{len(remaining)} tasks to run "
           f"(of {len(tasks)} in shard / {len(all_tasks)} total)", flush=True)
 
-    for i, (ex_idx, algo_idx, algo, span_idx, span, rec) in enumerate(remaining):
+    for i, (ex_idx, algo_idx, algo, span_idx, span, rec, mode) in enumerate(remaining):
         problem = rec["problem"]
         gold = rec["gold"]
-        think_text = rec["think"]["text"]
         pseudo = algo.get("pseudo-code", "").strip()
         if not pseudo:
             print(f"[{i+1}/{len(remaining)}] skip: no pseudo-code "
                   f"(ex={ex_idx} algo={algo_idx} span={span_idx})", flush=True)
             continue
 
+        if mode == "closed":
+            prefix_body = rec["think"]["text"][:span["start_think"]]
+            prepend_tag = True
+        else:  # unclosed
+            prefix_body = rec["generation"][:span["start_gen"]]
+            prepend_tag = False  # already contains "<think>"
+
         prefill, injection, input_ids = build_prefill(
-            tok, problem, think_text, span["start_think"], pseudo,
+            tok, problem, prefix_body, pseudo, prepend_tag,
         )
         input_ids = input_ids.to(model.device)
 
@@ -195,8 +213,11 @@ def main():
             "algo_idx": algo_idx,
             "algo_name": algo.get("name"),
             "span_idx": span_idx,
-            "span_start_think": span["start_think"],
-            "span_end_think": span["end_think"],
+            "mode": mode,
+            "span_start_think": span.get("start_think"),
+            "span_end_think": span.get("end_think"),
+            "span_start_gen": span.get("start_gen"),
+            "span_end_gen": span.get("end_gen"),
             "original_span_text": span.get("text", ""),
             "injection_text": injection,
             "prefill_text": prefill,
