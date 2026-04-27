@@ -31,7 +31,9 @@ mkdir -p sbatch/logs
 
 # --- load LUMI PyTorch module + attach the overlay built earlier ------------
 
-PYTORCH_MODULE=${PYTORCH_MODULE:-PyTorch/2.7.0-rocm-6.2.4-python-3.12-singularity-20250527}
+# CONTAINERROOT must point to the same path the build script used. If your
+# shell pre-sets CONTAINERROOT (e.g. via a project-installed module), we'll
+# respect that; otherwise default to scratch.
 SCRATCH=${SCRATCH:-/pfs/lustrep4/scratch/project_465002631/Petr}
 export CONTAINERROOT=${CONTAINERROOT:-$SCRATCH/qwen36_container}
 
@@ -40,7 +42,18 @@ if [ ! -d "$CONTAINERROOT/user-software" ] && [ ! -f "$CONTAINERROOT/user-softwa
     exit 1
 fi
 
+# Derive PYTORCH_MODULE from CONTAINERROOT path when not explicitly set.
+if [ -z "${PYTORCH_MODULE:-}" ]; then
+    CR_VER=$(basename "$CONTAINERROOT")
+    if [[ "$CR_VER" == *rocm*python*singularity* ]]; then
+        PYTORCH_MODULE="PyTorch/$CR_VER"
+    else
+        PYTORCH_MODULE=PyTorch/2.5.1-rocm-6.2.3-python-3.12-singularity-20241125
+    fi
+fi
+
 module use /appl/local/csc/modulefiles
+[ -n "${MODULEPATH_EXTRA:-}" ] && module use "$MODULEPATH_EXTRA"
 module load "$PYTORCH_MODULE"
 
 # --- standard env -----------------------------------------------------------

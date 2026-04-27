@@ -28,7 +28,8 @@ REQS="$HERE/qwen36_requirements.txt"
 
 # --- paths -------------------------------------------------------------------
 
-# LUMI HOME has 25 GB quota — overlay goes to scratch.
+# Respect any pre-set CONTAINERROOT (from a prior `module load PyTorch/...`
+# in the user's shell). Otherwise default to scratch (HOME has 25 GB quota).
 SCRATCH=${SCRATCH:-/pfs/lustrep4/scratch/project_465002631/Petr}
 export CONTAINERROOT="${CONTAINERROOT:-$SCRATCH/qwen36_container}"
 mkdir -p "$CONTAINERROOT"
@@ -38,15 +39,49 @@ echo "[build_qwen36] requirements: $REQS"
 
 # --- module load -------------------------------------------------------------
 
-# LUMI EasyBuild PyTorch module. Override PYTORCH_MODULE if a newer one ships.
-PYTORCH_MODULE=${PYTORCH_MODULE:-PyTorch/2.7.0-rocm-6.2.4-python-3.12-singularity-20250527}
+# Auto-detect the module name. Priority:
+#   1. If user already loaded a PyTorch module in their shell, skip reload.
+#   2. If user passed PYTORCH_MODULE env var, use it.
+#   3. If CONTAINERROOT path embeds a version (e.g. ".../PyTorch/2.5.1-rocm-…"),
+#      derive PYTORCH_MODULE from it.
+#   4. Hard fallback to a known-good name; if it's not on this system, the
+#      `module load` will print a list of available versions and we abort
+#      with a clear message.
 
-# CSC contributed module path (where the LUMI EasyBuild PyTorch lives).
-module use /appl/local/csc/modulefiles
-module load "$PYTORCH_MODULE"
+if module list 2>&1 | grep -qi PyTorch; then
+    echo "[build_qwen36] PyTorch module already loaded:"
+    module list 2>&1 | grep -i PyTorch | sed 's/^/    /'
+else
+    if [ -z "${PYTORCH_MODULE:-}" ]; then
+        # try to derive from CONTAINERROOT path
+        CR_VER=$(basename "$CONTAINERROOT")
+        if [[ "$CR_VER" == *rocm*python*singularity* ]]; then
+            PYTORCH_MODULE="PyTorch/$CR_VER"
+            echo "[build_qwen36] derived module from CONTAINERROOT: $PYTORCH_MODULE"
+        else
+            PYTORCH_MODULE=PyTorch/2.5.1-rocm-6.2.3-python-3.12-singularity-20241125
+            echo "[build_qwen36] using fallback default: $PYTORCH_MODULE"
+        fi
+    fi
 
-echo "[build_qwen36] loaded $PYTORCH_MODULE"
-echo "[build_qwen36] SIF=$SIF"
+    # CSC contributed module path is the canonical home for LUMI EasyBuild
+    # PyTorch. Project-local installs may live elsewhere — set
+    # MODULEPATH_EXTRA to add another path if needed.
+    module use /appl/local/csc/modulefiles
+    [ -n "${MODULEPATH_EXTRA:-}" ] && module use "$MODULEPATH_EXTRA"
+
+    if ! module load "$PYTORCH_MODULE" 2>/dev/null; then
+        echo "ERROR: cannot load $PYTORCH_MODULE." >&2
+        echo "Available PyTorch modules:" >&2
+        module avail PyTorch 2>&1 | sed 's/^/  /' >&2 || true
+        echo >&2
+        echo "Re-run with PYTORCH_MODULE=<name>  bash containers/build_qwen36.sh" >&2
+        exit 1
+    fi
+    echo "[build_qwen36] loaded $PYTORCH_MODULE"
+fi
+
+echo "[build_qwen36] SIF=${SIF:-(not set; module did not export it)}"
 
 # --- verify base torch is ROCm before touching anything ---------------------
 
