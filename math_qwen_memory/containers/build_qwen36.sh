@@ -53,22 +53,22 @@ module load EasyBuild-user
 # --- discover newest available PyTorch recipe via `eb --search` -----------
 
 if [ -z "${PYTORCH_MODULE:-}" ]; then
-    echo "[build_qwen36] searching EasyBuild for PyTorch+rocm+singularity recipes..."
-    # `eb --search PyTorch` prints all recipes. Filter to mainline (not vllm,
-    # not exampleVenv) rocm+python+singularity ones, pick newest by date suffix.
-    NEWEST_EB=$(eb --search PyTorch 2>&1 \
-        | grep -oE '/\S+\.eb' \
+    # Recipes for the LUMI container PyTorch modules live at this canonical
+    # path. `eb --search` only finds them when the right partition is loaded;
+    # bypass the module dance and read the dir directly.
+    LUMI_PT_RECIPES=/appl/local/containers/LUMI-EasyBuild-containers/easybuild/easyconfigs/p/PyTorch
+    echo "[build_qwen36] scanning $LUMI_PT_RECIPES for newest mainline recipe..."
+    NEWEST_EB=$(ls "$LUMI_PT_RECIPES"/PyTorch-*-rocm-*-python-*-singularity-*.eb 2>/dev/null \
         | grep -E 'PyTorch-[0-9]+\.[0-9]+\.[0-9]+-rocm-.*-python-.*-singularity-[0-9]{8}\.eb$' \
         | sort -r | head -1 || true)
     if [ -z "$NEWEST_EB" ]; then
-        echo "ERROR: no matching PyTorch recipe via eb --search." >&2
-        echo "Run manually:  eb --search PyTorch | grep singularity" >&2
-        echo "Then:  PYTORCH_MODULE=PyTorch/<ver> bash $0" >&2
+        echo "ERROR: no matching PyTorch recipe in $LUMI_PT_RECIPES." >&2
+        echo "Re-run with: PYTORCH_MODULE=PyTorch/<ver> bash $0" >&2
         exit 1
     fi
     EB_FILE=$(basename "$NEWEST_EB")
-    EB_BASE=${EB_FILE%.eb}                       # PyTorch-X.Y.Z-rocm-...
-    MODULE_VER=${EB_BASE#PyTorch-}               # X.Y.Z-rocm-...
+    EB_BASE=${EB_FILE%.eb}
+    MODULE_VER=${EB_BASE#PyTorch-}
     PYTORCH_MODULE="PyTorch/$MODULE_VER"
 else
     EB_FILE="PyTorch-${PYTORCH_MODULE#PyTorch/}.eb"
