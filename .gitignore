@@ -16,7 +16,7 @@
 **/outputs/baseline/
 **/outputs/pilot/
 wandb/
-
+math_qwen_memory/sbatch/logs
 # Model weights at any path
 *.safetensors
 *.ckpt

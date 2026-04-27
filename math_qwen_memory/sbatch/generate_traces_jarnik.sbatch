@@ -43,7 +43,7 @@ singularity exec $SIF \
         --split test \
         --n 72 \
         --n-traces 5 \
-        --max_new_tokens 32768 \
+        --max_new_tokens 16384 \
         --temperature 0.6 \
         --top_p 0.95 \
         --top_k 20 \
