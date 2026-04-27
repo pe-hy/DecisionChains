@@ -53,15 +53,17 @@ module load EasyBuild-user
 # --- discover newest available PyTorch recipe via `eb --search` -----------
 
 if [ -z "${PYTORCH_MODULE:-}" ]; then
-    echo "[build_qwen36] searching EasyBuild for PyTorch...singularity recipes..."
-    # `eb --search` prints lines like " * /path/to/PyTorch-...eb"
-    NEWEST_EB=$(eb --search 'PyTorch-.*-rocm-.*-python-.*-singularity-.*\.eb' 2>/dev/null \
-                  | grep -oE '/\S+\.eb' \
-                  | sort -r | head -1 || true)
+    echo "[build_qwen36] searching EasyBuild for PyTorch+rocm+singularity recipes..."
+    # `eb --search PyTorch` prints all recipes. Filter to mainline (not vllm,
+    # not exampleVenv) rocm+python+singularity ones, pick newest by date suffix.
+    NEWEST_EB=$(eb --search PyTorch 2>/dev/null \
+        | grep -oE '/\S+\.eb' \
+        | grep -E 'PyTorch-[0-9]+\.[0-9]+\.[0-9]+-rocm-.*-python-.*-singularity-[0-9]{8}\.eb$' \
+        | sort -r | head -1 || true)
     if [ -z "$NEWEST_EB" ]; then
-        echo "ERROR: no PyTorch-*-rocm-*-python-*-singularity-*.eb recipe found." >&2
-        echo "Try:  eb --search PyTorch    (lists all recipes)" >&2
-        echo "Then re-run with: PYTORCH_MODULE=PyTorch/<ver> bash $0" >&2
+        echo "ERROR: no matching PyTorch recipe via eb --search." >&2
+        echo "Run manually:  eb --search PyTorch | grep singularity" >&2
+        echo "Then:  PYTORCH_MODULE=PyTorch/<ver> bash $0" >&2
         exit 1
     fi
     EB_FILE=$(basename "$NEWEST_EB")
