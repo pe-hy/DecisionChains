@@ -66,7 +66,11 @@ echo "[build_qwen36] requirements:   $REQS"
 #    — `eb` skips if already installed, unless --rebuild).
 if ! module load "$PYTORCH_MODULE" 2>/dev/null; then
     echo "[build_qwen36] $PYTORCH_MODULE not yet installed. Running EasyBuild..."
-    eb "$EB_FILE"
+    # --skip-sanity-check: the recipe's own sanity step pins exact version of
+    # transformers / huggingface-cli that the public LUMI SIF doesn't always
+    # match. Install proceeds otherwise; we run our own post-install asserts
+    # later. Override via EB_FLAGS env var if you need stricter behaviour.
+    eb "$EB_FILE" ${EB_FLAGS:---skip-sanity-check}
 fi
 
 # 6) Per LUMI docs: "To use the container after installation, the
