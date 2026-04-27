@@ -115,6 +115,24 @@ print('base torch:', torch.__version__, 'hip:', torch.version.hip)
 #    venv automatically. torch is already provided by the SIF → not pulled.
 pip install --upgrade -r "$REQS"
 
+# 8b) Diagnostics: where did pip actually put things? Container's base SIF
+#     ships transformers/etc; "Requirement already satisfied" means pip
+#     skipped. We need at least one of our requirements to live in
+#     $CONTAINERROOT/user-software so make-squashfs has something to pack.
+echo "[build_qwen36] pip install locations:"
+for pkg in transformers accelerate math_verify huggingface_hub; do
+    loc=$(pip show "$pkg" 2>/dev/null | awk '/^Location:/ {print $2}')
+    echo "    $pkg -> $loc"
+done
+
+if [ ! -d "$CONTAINERROOT/user-software" ]; then
+    echo "[build_qwen36] user-software/ empty — base SIF already had everything."
+    echo "[build_qwen36] forcing reinstall of math_verify into the user venv to seed it"
+    # math_verify is the package least likely to already be in the base SIF.
+    # --force-reinstall makes pip write a fresh copy regardless of cached state.
+    pip install --upgrade --force-reinstall --no-deps math_verify
+fi
+
 # 9) Final import-symbol assertions for everything generate_traces/inject use.
 python -c "
 import torch
