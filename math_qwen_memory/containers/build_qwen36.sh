@@ -56,7 +56,7 @@ if [ -z "${PYTORCH_MODULE:-}" ]; then
     echo "[build_qwen36] searching EasyBuild for PyTorch+rocm+singularity recipes..."
     # `eb --search PyTorch` prints all recipes. Filter to mainline (not vllm,
     # not exampleVenv) rocm+python+singularity ones, pick newest by date suffix.
-    NEWEST_EB=$(eb --search PyTorch 2>/dev/null \
+    NEWEST_EB=$(eb --search PyTorch 2>&1 \
         | grep -oE '/\S+\.eb' \
         | grep -E 'PyTorch-[0-9]+\.[0-9]+\.[0-9]+-rocm-.*-python-.*-singularity-[0-9]{8}\.eb$' \
         | sort -r | head -1 || true)
