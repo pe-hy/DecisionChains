@@ -31,11 +31,10 @@ mkdir -p sbatch/logs
 
 # --- load LUMI PyTorch module + attach the overlay built earlier ------------
 
-# CONTAINERROOT must point to the same path the build script used. If your
-# shell pre-sets CONTAINERROOT (e.g. via a project-installed module), we'll
-# respect that; otherwise default to scratch.
+# CONTAINERROOT must match the per-user scratch path the build script used.
+# We pin it explicitly to avoid using a shared/inherited overlay.
 SCRATCH=${SCRATCH:-/pfs/lustrep4/scratch/project_465002631/Petr}
-export CONTAINERROOT=${CONTAINERROOT:-$SCRATCH/qwen36_container}
+export CONTAINERROOT="$SCRATCH/qwen36_container"
 
 if [ ! -d "$CONTAINERROOT/user-software" ] && [ ! -f "$CONTAINERROOT/user-software.squashfs" ]; then
     echo "ERROR: $CONTAINERROOT has no overlay. Run containers/build_qwen36.sh first." >&2

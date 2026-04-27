@@ -28,14 +28,25 @@ REQS="$HERE/qwen36_requirements.txt"
 
 # --- paths -------------------------------------------------------------------
 
-# Respect any pre-set CONTAINERROOT (from a prior `module load PyTorch/...`
-# in the user's shell). Otherwise default to scratch (HOME has 25 GB quota).
+# Refuse to write into a shared install path. The base SIF inside any LUMI
+# PyTorch module is read-only (safe), but its overlay at
+# $CONTAINERROOT/user-software is writable — pip install there mutates state
+# others may depend on. Force CONTAINERROOT to per-user scratch.
 SCRATCH=${SCRATCH:-/pfs/lustrep4/scratch/project_465002631/Petr}
-export CONTAINERROOT="${CONTAINERROOT:-$SCRATCH/qwen36_container}"
+PROJECT_USER_ROOT="$SCRATCH/qwen36_container"
+
+if [ -n "${CONTAINERROOT:-}" ] && [[ "$CONTAINERROOT" != "$PROJECT_USER_ROOT" ]]; then
+    echo "[build_qwen36] WARNING: existing CONTAINERROOT=$CONTAINERROOT"
+    echo "[build_qwen36] looks shared/inherited; overriding to a private path"
+    echo "[build_qwen36] under your scratch so pip install does not mutate"
+    echo "[build_qwen36] anyone else's environment."
+fi
+export CONTAINERROOT="$PROJECT_USER_ROOT"
 mkdir -p "$CONTAINERROOT"
 
-echo "[build_qwen36] CONTAINERROOT=$CONTAINERROOT"
+echo "[build_qwen36] CONTAINERROOT=$CONTAINERROOT  (private overlay path)"
 echo "[build_qwen36] requirements: $REQS"
+echo "[build_qwen36] (the base SIF inside the module is read-only — never modified)"
 
 # --- module load -------------------------------------------------------------
 
