@@ -1,162 +1,134 @@
 #!/usr/bin/env bash
-# Build a customised LUMI PyTorch container with the project's extra deps.
+# Build a private LUMI PyTorch container with extra pip packages.
 #
-# LUMI does NOT allow `apptainer build --fakeroot` for ordinary users
-# (no /etc/subuid mapping). The supported path is:
-#   1. `module load PyTorch/<version>-singularity-<date>` — exposes the SIF
-#      and a writable Python venv overlay at $CONTAINERROOT/user-software.
-#   2. `pip install -r containers/qwen36_requirements.txt` — adds our packages
-#      into that overlay.
-#   3. `make-squashfs` — bakes the overlay into a squashfs file which the
-#      module wrapper auto-attaches at runtime (faster on Lustre).
+# LUMI-canonical workflow per
+#   https://lumi-supercomputer.github.io/LUMI-EasyBuild-docs/p/PyTorch/
+#   https://docs.lumi-supercomputer.eu/software/installing/
+#
+# 1. Set EBU_USER_PREFIX so EasyBuild installs into YOUR scratch (private).
+# 2. Install LUMI's EasyBuild PyTorch 2.7.1 module via `eb`. It uses the
+#    official ROCm pytorch SIF and a writable per-user user-software venv.
+# 3. Load the module → CONTAINERROOT is now your private dir.
+# 4. `pip install -r qwen36_requirements.txt` (host shell — 2.7.1+ wraps pip
+#    so it routes into the container venv automatically).
+# 5. `make-squashfs` → packs the venv into user-software.squashfs.
+# 6. Reload module → squashfs is bound; venv dir can be deleted.
 #
 # Two files:
-#   - containers/qwen36_requirements.txt  (definition: what to install)
-#   - containers/build_qwen36.sh          (this script: how to build it)
+#   containers/qwen36_requirements.txt  (definition)
+#   containers/build_qwen36.sh          (this script)
 #
-# Usage on LUMI login node:
+# Run on LUMI login node:
 #   bash containers/build_qwen36.sh
-#
-# Then in your sbatch you set CONTAINERROOT to the same path and module-load
-# the same PyTorch version. The provided sbatch (sbatch/generate_traces_27b.sbatch)
-# already does this.
 
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REQS="$HERE/qwen36_requirements.txt"
 
-# --- paths -------------------------------------------------------------------
+# --- per-user EasyBuild prefix (in scratch — HOME has 25 GB quota) ----------
 
-# Refuse to write into a shared install path. The base SIF inside any LUMI
-# PyTorch module is read-only (safe), but its overlay at
-# $CONTAINERROOT/user-software is writable — pip install there mutates state
-# others may depend on. Force CONTAINERROOT to per-user scratch.
 SCRATCH=${SCRATCH:-/pfs/lustrep4/scratch/project_465002631/Petr}
-PROJECT_USER_ROOT="$SCRATCH/qwen36_container"
+export EBU_USER_PREFIX="${EBU_USER_PREFIX:-$SCRATCH/EasyBuild}"
+mkdir -p "$EBU_USER_PREFIX"
 
-if [ -n "${CONTAINERROOT:-}" ] && [[ "$CONTAINERROOT" != "$PROJECT_USER_ROOT" ]]; then
-    echo "[build_qwen36] WARNING: existing CONTAINERROOT=$CONTAINERROOT"
-    echo "[build_qwen36] looks shared/inherited; overriding to a private path"
-    echo "[build_qwen36] under your scratch so pip install does not mutate"
-    echo "[build_qwen36] anyone else's environment."
-fi
-export CONTAINERROOT="$PROJECT_USER_ROOT"
-mkdir -p "$CONTAINERROOT"
+# --- module name (override via PYTORCH_MODULE if a newer one ships) ---------
 
-echo "[build_qwen36] CONTAINERROOT=$CONTAINERROOT  (private overlay path)"
-echo "[build_qwen36] requirements: $REQS"
-echo "[build_qwen36] (the base SIF inside the module is read-only — never modified)"
+PYTORCH_MODULE=${PYTORCH_MODULE:-PyTorch/2.7.1-rocm-6.2.4-python-3.12-singularity-20250827}
+EB_FILE=${EB_FILE:-${PYTORCH_MODULE#PyTorch/}.eb}
+EB_FILE="PyTorch-${EB_FILE}"
 
-# --- module load -------------------------------------------------------------
+echo "[build_qwen36] EBU_USER_PREFIX=$EBU_USER_PREFIX"
+echo "[build_qwen36] target module:  $PYTORCH_MODULE"
+echo "[build_qwen36] eb recipe:      $EB_FILE"
+echo "[build_qwen36] requirements:   $REQS"
 
-# Auto-detect the module name. Priority:
-#   1. If user already loaded a PyTorch module in their shell, skip reload.
-#   2. If user passed PYTORCH_MODULE env var, use it.
-#   3. If CONTAINERROOT path embeds a version (e.g. ".../PyTorch/2.5.1-rocm-…"),
-#      derive PYTORCH_MODULE from it.
-#   4. Hard fallback to a known-good name; if it's not on this system, the
-#      `module load` will print a list of available versions and we abort
-#      with a clear message.
+# Drop any inherited PyTorch / shared-CONTAINERROOT to avoid bind-leak.
+unset CONTAINERROOT SIF SIFPYTORCH SINGULARITY_BIND
+module purge -f 2>/dev/null || true
+module load LUMI
 
-if module list 2>&1 | grep -qi PyTorch; then
-    echo "[build_qwen36] PyTorch module already loaded:"
-    module list 2>&1 | grep -i PyTorch | sed 's/^/    /'
-else
-    if [ -z "${PYTORCH_MODULE:-}" ]; then
-        # try to derive from CONTAINERROOT path
-        CR_VER=$(basename "$CONTAINERROOT")
-        if [[ "$CR_VER" == *rocm*python*singularity* ]]; then
-            PYTORCH_MODULE="PyTorch/$CR_VER"
-            echo "[build_qwen36] derived module from CONTAINERROOT: $PYTORCH_MODULE"
-        else
-            PYTORCH_MODULE=PyTorch/2.5.1-rocm-6.2.3-python-3.12-singularity-20241125
-            echo "[build_qwen36] using fallback default: $PYTORCH_MODULE"
-        fi
-    fi
+# --- install module privately if not already installed ----------------------
 
-    # CSC contributed module path is the canonical home for LUMI EasyBuild
-    # PyTorch. Project-local installs may live elsewhere — set
-    # MODULEPATH_EXTRA to add another path if needed.
-    module use /appl/local/csc/modulefiles
-    [ -n "${MODULEPATH_EXTRA:-}" ] && module use "$MODULEPATH_EXTRA"
-
-    if ! module load "$PYTORCH_MODULE" 2>/dev/null; then
-        echo "ERROR: cannot load $PYTORCH_MODULE." >&2
-        echo "Available PyTorch modules:" >&2
-        module avail PyTorch 2>&1 | sed 's/^/  /' >&2 || true
-        echo >&2
-        echo "Re-run with PYTORCH_MODULE=<name>  bash containers/build_qwen36.sh" >&2
-        exit 1
-    fi
-    echo "[build_qwen36] loaded $PYTORCH_MODULE"
+# `module is-avail` doesn't reliably distinguish private vs system modules,
+# so just try `module load`. If it fails, run `eb` to install.
+module load EasyBuild-user
+if ! module load "$PYTORCH_MODULE" 2>/dev/null; then
+    echo "[build_qwen36] $PYTORCH_MODULE not yet installed. Running EasyBuild..."
+    eb "$EB_FILE" -r
+    module load "$PYTORCH_MODULE"
 fi
 
-echo "[build_qwen36] SIF=${SIF:-(not set; module did not export it)}"
+echo "[build_qwen36] loaded $PYTORCH_MODULE"
+echo "[build_qwen36] CONTAINERROOT=$CONTAINERROOT  (private; module-managed)"
+echo "[build_qwen36] SIF=$SIF"
 
-# --- helpers: run python / pip *inside* the container ----------------------
+# --- post-load sanity --------------------------------------------------------
 
-# PyTorch 2.5.1 module on LUMI does not add `python` to host PATH (only
-# 2.6.0+ does). All python and pip invocations must go through:
-#     singularity exec $SIF bash -c "$WITH_CONDA; <command>"
-# $SIF and $WITH_CONDA are exported by the module.
-in_container() {
-    singularity exec "$SIF" bash -c "\$WITH_CONDA; $*"
-}
-
-# --- verify base torch is ROCm before touching anything ---------------------
-
-in_container 'python -c "
+# 2.7.1 puts python/pip on host PATH directly.
+python -c "
 import torch
-assert torch.version.hip is not None, \"base torch is not ROCm — wrong module?\"
-print(\"base torch:\", torch.__version__, \"hip:\", torch.version.hip)
-"'
+assert torch.version.hip is not None, 'base torch is not ROCm — wrong module?'
+print('base torch:', torch.__version__, 'hip:', torch.version.hip)
+"
 
-# --- install pip packages into the user-software overlay --------------------
+# --- install our pip packages ------------------------------------------------
 
-# `pip install` here writes to $CONTAINERROOT/user-software/venv/pytorch
-# (writable; the SIF stays read-only). The base venv has ROCm torch already,
-# so pip's resolver sees torch as satisfied and won't shadow it.
-in_container "pip install --upgrade -r '$REQS'"
+# pip install on host shell routes into $CONTAINERROOT/user-software/venv
+# (module wrapper). Torch is already provided by the SIF and the resolver
+# treats it as satisfied — no CUDA wheel pulled.
+pip install --upgrade -r "$REQS"
 
-# --- post-install assertions: every import path that runtime needs ----------
+# --- post-install assertions -------------------------------------------------
 
-in_container 'python -c "
+python -c "
 import torch
-assert torch.version.hip is not None, \"ROCm torch lost! refuse to ship\"
-print(\"torch:\", torch.__version__, \"hip:\", torch.version.hip)
+assert torch.version.hip is not None, 'ROCm torch lost! refuse to ship'
+print('torch:', torch.__version__, 'hip:', torch.version.hip)
 
 import transformers, accelerate, tokenizers, safetensors, huggingface_hub
-print(\"transformers:\", transformers.__version__)
-print(\"accelerate:\", accelerate.__version__)
-print(\"tokenizers:\", tokenizers.__version__)
-print(\"safetensors:\", safetensors.__version__)
-print(\"huggingface_hub:\", huggingface_hub.__version__)
+print('transformers:', transformers.__version__)
+print('accelerate:', accelerate.__version__)
+print('tokenizers:', tokenizers.__version__)
+print('safetensors:', safetensors.__version__)
+print('huggingface_hub:', huggingface_hub.__version__)
 
 from transformers import (
     AutoModelForCausalLM, AutoTokenizer,
     LogitsProcessorList, TemperatureLogitsWarper,
     TopPLogitsWarper, TopKLogitsWarper, MinPLogitsWarper,
 )
-print(\"transformers symbols: OK\")
+print('transformers symbols: OK')
 
 from math_verify import parse, verify
-print(\"math_verify: OK\")
-"'
+print('math_verify: OK')
+"
 
-# --- bake overlay into squashfs (fast Lustre access) ------------------------
+# --- bake overlay into squashfs (Lustre-friendly) ---------------------------
 
-# `make-squashfs` is a host-side wrapper provided by the module that packs
-# $CONTAINERROOT/user-software into a SquashFS file the runtime auto-binds.
 make-squashfs
+
+# After make-squashfs, the user-software dir is redundant (the squashfs is
+# bound on next module load). Removing it prevents accidental shadow installs.
+rm -rf "$CONTAINERROOT/user-software"
+
+# Reload so the squashfs is mounted.
+module unload "$PYTORCH_MODULE"
+module load   "$PYTORCH_MODULE"
+
+# Final import check (this time against the squashfs-mounted overlay).
+python -c "
+import torch, transformers, accelerate, math_verify
+print('post-squashfs:',
+      'torch', torch.__version__,
+      'transformers', transformers.__version__,
+      'accelerate', accelerate.__version__,
+      'math_verify OK')
+"
 
 echo
 echo "[build_qwen36] DONE."
+echo "[build_qwen36] artifact: $CONTAINERROOT/user-software.squashfs"
+echo "[build_qwen36] back this up before 'eb' re-installs: cp it to /project/<id>/"
 echo
-echo "Next:"
-echo "  sbatch sbatch/generate_traces_27b.sbatch"
-echo
-echo "The sbatch will:  module use /appl/local/csc/modulefiles"
-echo "                  module load $PYTORCH_MODULE"
-echo "                  export CONTAINERROOT=$CONTAINERROOT"
-echo "and then run python directly (no explicit singularity exec)."
+echo "Run with:  sbatch sbatch/generate_traces_27b.sbatch"
