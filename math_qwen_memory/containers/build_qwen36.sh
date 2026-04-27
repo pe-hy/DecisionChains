@@ -95,9 +95,11 @@ echo "[build_qwen36] which python -> $(which python)"
 echo "[build_qwen36] which pip    -> $(which pip)"
 PYBIN=$(which python)
 PIPBIN=$(which pip)
-if [[ "$PYBIN" == */easybuild/* || "$PIPBIN" == */easybuild/* ]]; then
-    echo "ERROR: python/pip resolves to EasyBuild-user, not the container wrapper." >&2
-    echo "       Wrapper should live under $CONTAINERROOT or /appl/...PyTorch/..." >&2
+if [[ "$PYBIN" != "$CONTAINERROOT/"* || "$PIPBIN" != "$CONTAINERROOT/"* ]]; then
+    echo "ERROR: python/pip not under \$CONTAINERROOT — wrong wrapper." >&2
+    echo "       expected prefix: $CONTAINERROOT/" >&2
+    echo "       got python: $PYBIN" >&2
+    echo "       got pip:    $PIPBIN" >&2
     exit 1
 fi
 
