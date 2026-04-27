@@ -24,8 +24,19 @@ os.environ["HF_HUB_CACHE"] = str(HF_CACHE)
 MODEL_ID = "Qwen/Qwen3-8B"
 DATA_ROOT = ROOT / "data"
 
+# Default system prompt — Qwen3 model-card recommended phrasing for math.
 SYSTEM_PROMPT = (
     "Please reason step by step, and put your final answer within \\boxed{}."
+)
+
+# Jarník is mostly proof-style problems. Ask the model to produce a short
+# Conclusion: block at the end so post-hoc LLM-judging can read the conclusion
+# instead of the full multi-thousand-token proof.
+JARNIK_SYSTEM_PROMPT = (
+    "Please reason step by step. If the problem asks for a numerical or "
+    "closed-form answer, put it inside \\boxed{}. End your response with a "
+    "section starting with 'Conclusion:' that states, in 1-3 sentences, the "
+    "key claim being proved or the final value obtained."
 )
 
 DATASETS = {
@@ -46,6 +57,13 @@ DATASETS = {
         "train_path": None,
         "q_field": "problem",
         "a_field": "answer",
+    },
+    "jarnik": {
+        "path": "jarnik/jarnik_2018to2026.jsonl",
+        "train_path": None,
+        "q_field": "problem",
+        "a_field": "answer",
+        "system_prompt": JARNIK_SYSTEM_PROMPT,
     },
 }
 
@@ -257,9 +275,11 @@ def generate(args):
     results = []
     total = len(examples) * args.n_traces
     pos = 0
+    sys_prompt = DATASETS[args.dataset].get("system_prompt", SYSTEM_PROMPT)
+    print(f"system_prompt: {sys_prompt!r}", flush=True)
     for (idx, ex) in examples:
         messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": sys_prompt},
             {"role": "user", "content": ex["problem"]},
         ]
         inputs = tok.apply_chat_template(
