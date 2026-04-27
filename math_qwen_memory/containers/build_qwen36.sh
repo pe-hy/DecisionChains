@@ -43,11 +43,38 @@ fi
 export EBU_USER_PREFIX="$PRIVATE_EBU_PREFIX"
 mkdir -p "$EBU_USER_PREFIX"
 
-# --- module name (override via PYTORCH_MODULE if a newer one ships) ---------
+# --- discover newest available PyTorch recipe (rocm + singularity) ---------
 
-PYTORCH_MODULE=${PYTORCH_MODULE:-PyTorch/2.7.1-rocm-6.2.4-python-3.12-singularity-20250827}
-EB_FILE=${EB_FILE:-${PYTORCH_MODULE#PyTorch/}.eb}
-EB_FILE="PyTorch-${EB_FILE}"
+EB_RECIPE_DIRS=(
+    /appl/lumi/LUMI-EasyBuild-contrib/easybuild/easyconfigs
+    /appl/lumi/LUMI-SoftwareStack/easybuild/easyconfigs
+    /appl/lumi/mgmt/ebfiles_repo/LUMI-25.03/LUMI-L
+    /appl/lumi/mgmt/ebfiles_repo/LUMI-25.03/LUMI-common
+)
+
+if [ -z "${PYTORCH_MODULE:-}" ]; then
+    # find newest PyTorch-*-rocm-*-python-3.*-singularity-*.eb anywhere
+    NEWEST_EB=""
+    for d in "${EB_RECIPE_DIRS[@]}"; do
+        [ -d "$d" ] || continue
+        cand=$(find "$d" -maxdepth 6 -name 'PyTorch-*-rocm-*-python-3.*-singularity-*.eb' 2>/dev/null | sort -r | head -1)
+        if [ -n "$cand" ] && { [ -z "$NEWEST_EB" ] || [[ "$cand" > "$NEWEST_EB" ]]; }; then
+            NEWEST_EB="$cand"
+        fi
+    done
+    if [ -z "$NEWEST_EB" ]; then
+        echo "ERROR: no PyTorch-*-rocm-*-python-3.*-singularity-*.eb found in:" >&2
+        printf '  %s\n' "${EB_RECIPE_DIRS[@]}" >&2
+        echo "Pass PYTORCH_MODULE=PyTorch/<ver> bash $0 with a known module name." >&2
+        exit 1
+    fi
+    EB_FILE=$(basename "$NEWEST_EB")
+    EB_BASE=${EB_FILE%.eb}                       # e.g. PyTorch-2.7.1-rocm-...
+    MODULE_VER=${EB_BASE#PyTorch-}               # e.g. 2.7.1-rocm-...
+    PYTORCH_MODULE="PyTorch/$MODULE_VER"
+else
+    EB_FILE="PyTorch-${PYTORCH_MODULE#PyTorch/}.eb"
+fi
 
 echo "[build_qwen36] EBU_USER_PREFIX=$EBU_USER_PREFIX"
 echo "[build_qwen36] target module:  $PYTORCH_MODULE"
