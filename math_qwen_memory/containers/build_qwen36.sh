@@ -94,53 +94,60 @@ fi
 
 echo "[build_qwen36] SIF=${SIF:-(not set; module did not export it)}"
 
+# --- helpers: run python / pip *inside* the container ----------------------
+
+# PyTorch 2.5.1 module on LUMI does not add `python` to host PATH (only
+# 2.6.0+ does). All python and pip invocations must go through:
+#     singularity exec $SIF bash -c "$WITH_CONDA; <command>"
+# $SIF and $WITH_CONDA are exported by the module.
+in_container() {
+    singularity exec "$SIF" bash -c "\$WITH_CONDA; $*"
+}
+
 # --- verify base torch is ROCm before touching anything ---------------------
 
-python -c "
+in_container 'python -c "
 import torch
-assert torch.version.hip is not None, 'base torch is not ROCm — wrong module?'
-print('base torch:', torch.__version__, 'hip:', torch.version.hip)
-"
+assert torch.version.hip is not None, \"base torch is not ROCm — wrong module?\"
+print(\"base torch:\", torch.__version__, \"hip:\", torch.version.hip)
+"'
 
 # --- install pip packages into the user-software overlay --------------------
 
-# `pip install` from inside the loaded module writes to
-# $CONTAINERROOT/user-software/venv/pytorch (writable; the SIF stays read-only).
-# No --no-deps here: the overlay can hold transitive deps safely. We avoid
-# torch shadowing because torch is already provided by the SIF and pip's
-# resolver sees it as satisfied.
-pip install --upgrade -r "$REQS"
+# `pip install` here writes to $CONTAINERROOT/user-software/venv/pytorch
+# (writable; the SIF stays read-only). The base venv has ROCm torch already,
+# so pip's resolver sees torch as satisfied and won't shadow it.
+in_container "pip install --upgrade -r '$REQS'"
 
 # --- post-install assertions: every import path that runtime needs ----------
 
-python -c "
+in_container 'python -c "
 import torch
-assert torch.version.hip is not None, 'ROCm torch lost! refuse to ship'
-print('torch:', torch.__version__, 'hip:', torch.version.hip)
+assert torch.version.hip is not None, \"ROCm torch lost! refuse to ship\"
+print(\"torch:\", torch.__version__, \"hip:\", torch.version.hip)
 
 import transformers, accelerate, tokenizers, safetensors, huggingface_hub
-print('transformers:', transformers.__version__)
-print('accelerate:', accelerate.__version__)
-print('tokenizers:', tokenizers.__version__)
-print('safetensors:', safetensors.__version__)
-print('huggingface_hub:', huggingface_hub.__version__)
+print(\"transformers:\", transformers.__version__)
+print(\"accelerate:\", accelerate.__version__)
+print(\"tokenizers:\", tokenizers.__version__)
+print(\"safetensors:\", safetensors.__version__)
+print(\"huggingface_hub:\", huggingface_hub.__version__)
 
 from transformers import (
     AutoModelForCausalLM, AutoTokenizer,
     LogitsProcessorList, TemperatureLogitsWarper,
     TopPLogitsWarper, TopKLogitsWarper, MinPLogitsWarper,
 )
-print('transformers symbols: OK')
+print(\"transformers symbols: OK\")
 
 from math_verify import parse, verify
-print('math_verify: OK')
-"
+print(\"math_verify: OK\")
+"'
 
 # --- bake overlay into squashfs (fast Lustre access) ------------------------
 
-# `make-squashfs` is provided by the LUMI EasyBuild PyTorch module. It packs
-# $CONTAINERROOT/user-software into a SquashFS file the module wrapper
-# auto-binds at runtime.
+# `make-squashfs` is a host-side wrapper provided by the module that packs
+# $CONTAINERROOT/user-software into a SquashFS file the runtime auto-binds.
 make-squashfs
 
 echo

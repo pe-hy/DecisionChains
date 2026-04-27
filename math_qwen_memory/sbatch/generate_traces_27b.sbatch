@@ -72,14 +72,17 @@ N=${N:-27}
 N_TRACES=${N_TRACES:-5}
 SEED=${SEED:-0}
 
-# Module's wrapper makes `python` the container's python with the overlay
-# bound — no explicit `singularity exec $SIF` needed.
-python -u generate_traces.py \
-    --model qwen3.6-27b \
-    --dataset "$DATASET" \
-    --split "$SPLIT" \
-    --n "$N" \
-    --n-traces "$N_TRACES" \
-    --seed "$SEED" \
-    --shard-idx $SLURM_ARRAY_TASK_ID \
-    --n-shards 8
+# PyTorch 2.5.1 module does not put `python` on host PATH (only 2.6.0+ does).
+# We invoke python via singularity exec $SIF + $WITH_CONDA. The module exports
+# both vars and pre-binds CONTAINERROOT (overlay), so the upgraded transformers
+# from build_qwen36.sh is visible.
+singularity exec "$SIF" bash -c "\$WITH_CONDA; \
+    python -u generate_traces.py \
+        --model qwen3.6-27b \
+        --dataset $DATASET \
+        --split $SPLIT \
+        --n $N \
+        --n-traces $N_TRACES \
+        --seed $SEED \
+        --shard-idx $SLURM_ARRAY_TASK_ID \
+        --n-shards 8"
