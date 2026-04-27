@@ -2,7 +2,7 @@
 #SBATCH --job-name=qwen36_27b_gen
 #SBATCH --output=sbatch/logs/gen_27b_%A_%a.out
 #SBATCH --error=sbatch/logs/gen_27b_%A_%a.err
-#SBATCH --time=72:00:00
+#SBATCH --time=48:00:00
 #SBATCH --account=project_465002631
 #SBATCH --partition=small-g
 #SBATCH --nodes=1
@@ -33,13 +33,15 @@ unset CONTAINERROOT SIF SIFPYTORCH SINGULARITY_BIND
 module purge -f 2>/dev/null || true
 module load LUMI
 
-# 3) Pick newest module installed under the private prefix. The module may
-#    live under partition/L (login-node install) or partition/G; search all.
+# 3) Pick newest module installed under the private prefix.
+#    Our build_qwen36.sh installs via `module load partition/container` so the
+#    module ends up under `modules/container/PyTorch/<version>.lua` (not under
+#    modules/LUMI/<ver>/partition/<L|G>/...).  After `module load LUMI` the
+#    private modules/container is on MODULEPATH automatically.
 if [ -z "${PYTORCH_MODULE:-}" ]; then
-    NEWEST=$(find "$EBU_USER_PREFIX/modules/LUMI/"*/partition/*/PyTorch \
-               -maxdepth 1 -name '[0-9]*.lua' 2>/dev/null \
+    NEWEST=$(find "$EBU_USER_PREFIX/modules" -name '[0-9]*.lua' 2>/dev/null \
+        | grep -E '/PyTorch/[0-9]+\.[0-9]+\.[0-9]+-rocm-.*-singularity-[0-9]{8}\.lua$' \
         | xargs -r -n1 basename \
-        | grep -E '^[0-9]+\.[0-9]+\.[0-9]+-rocm-.*-singularity-[0-9]{8}\.lua$' \
         | sort -ru | head -1 || true)
     if [ -z "$NEWEST" ]; then
         echo "ERROR: no PyTorch .lua module under $EBU_USER_PREFIX/modules/" >&2
@@ -48,16 +50,7 @@ if [ -z "${PYTORCH_MODULE:-}" ]; then
     fi
     PYTORCH_MODULE="PyTorch/${NEWEST%.lua}"
 fi
-
-# Module was likely installed under a different partition than the runtime
-# node's default. Switch into the partition that holds it before loading.
-PT_PARTITION=$(find "$EBU_USER_PREFIX/modules/LUMI/" -name "${PYTORCH_MODULE#PyTorch/}.lua" 2>/dev/null \
-    | head -1 \
-    | sed -nE 's|.*/partition/([^/]+)/PyTorch/.*|\1|p')
-if [ -n "$PT_PARTITION" ]; then
-    echo "[sbatch] PyTorch module lives under partition/$PT_PARTITION; switching"
-    module load "partition/$PT_PARTITION" 2>/dev/null || true
-fi
+echo "[sbatch] using $PYTORCH_MODULE"
 
 module load "$PYTORCH_MODULE"
 

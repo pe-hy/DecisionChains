@@ -54,6 +54,13 @@ env/
 # Data copies — reproducible from external source; see each project's CLAUDE.md
 math_qwen_memory/data/
 
+# Private LUMI EasyBuild container install: ~18 GB SIF + modules + squashfs.
+# Reproducible via `bash math_qwen_memory/containers/build_qwen36.sh`.
+# See math_qwen_memory/containers/README.md.
+math_qwen_memory/containers/easybuild/
+# Pip cache used by build_qwen36.sh (PIP_CACHE_DIR override)
+**/.pipcache/
+
 # Checkpoints and temp
 memory_experiment/checkpoint/
 validate_pretrained/output/

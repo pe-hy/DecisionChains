@@ -1,21 +1,32 @@
 # Definition: extra pip packages baked into the LUMI ROCm PyTorch container.
 # Consumed by containers/build_qwen36.sh.
 #
-# Why each one:
-#   transformers>=4.50         model_type='qwen3_5' recognition (Qwen3.6)
-#   accelerate>=0.30           required by newer transformers for device_map
-#   tokenizers>=0.20           ABI-compatible with newer transformers
-#   safetensors>=0.4           weight format
-#   huggingface-hub>=0.23      HF cache + downloads
+# IMPORTANT: floors here MUST be ABOVE whatever the conda env in the SIF
+# already ships, otherwise pip says "requirement already satisfied" and
+# nothing lands in the squashfs.  The SIF has transformers 4.55.3,
+# accelerate 0.34.2, tokenizers 0.21.4, etc.
+#
+# Why each one and why the floor:
+#   transformers>=5.4.0        qwen3_5 model_type was added in 5.4.0.
+#                              Qwen3.6-27B's config.json declares
+#                              model_type="qwen3_5", so anything < 5.4.0
+#                              raises KeyError at AutoConfig.from_pretrained.
+#                              (Verified: 4.57.6 has 0 qwen3_5 entries,
+#                              5.4.0 has 5; PyPI as of 2026-04.)
+#   tokenizers>=0.22.0         required ABI by transformers 5.x
+#   accelerate>=1.10           transformers 5.x device_map / dispatch APIs
+#   safetensors>=0.7           transformers 5.x weight loader; conda ships
+#                              0.6.2 so >0.6.2 is required to force install
+#   huggingface-hub>=0.30      modern hf_hub_download / snapshot_download
 #   math_verify                primary boxed-answer grader (pulls sympy etc.)
 #
-# Torch is NOT listed: the LUMI base image already provides the ROCm build,
-# and `module load PyTorch/...` exposes it. Pulling torch from PyPI would
-# overwrite the ROCm wheel with a CUDA wheel and silently break the GPU.
+# Torch is NOT listed: the LUMI base image already provides the ROCm build.
+# Pulling torch from PyPI would overwrite the ROCm wheel with a CUDA wheel
+# and silently break the GPU.
 
-transformers>=4.50
-accelerate>=0.30
-tokenizers>=0.20
-safetensors>=0.4
-huggingface-hub>=0.23
+transformers>=5.4.0
+tokenizers>=0.22.0
+accelerate>=1.10
+safetensors>=0.7
+huggingface-hub>=0.30
 math_verify
