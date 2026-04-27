@@ -13,33 +13,41 @@
 #SBATCH --array=0-7
 
 # Qwen3.6-27B on LUMI MI250X, single GCD (~64 GB).
-# Uses the per-user PyTorch 2.7.1 module installed by containers/build_qwen36.sh
-# (which adds transformers>=4.50, accelerate, math_verify on top of the
-# official LUMI ROCm pytorch container as a user-software.squashfs overlay).
-#
-# Build the module ONCE before submitting:
+# Uses the per-user PyTorch container module installed by
 #   bash containers/build_qwen36.sh
+# (which baked transformers>=4.50, accelerate, math_verify into a
+# user-software.squashfs overlay on top of the LUMI ROCm pytorch container).
 #
 # Outputs: outputs/pilot/${DATASET}_..._qwen3.6-27b_shard{0..7}of8.jsonl
 
 cd "$SLURM_SUBMIT_DIR"
 mkdir -p sbatch/logs
 
-# --- private LUMI EasyBuild prefix + PyTorch module -------------------------
-
-# Force private prefix inside this project's containers/ dir; ignore any
-# shared-path value inherited from .bashrc.
+# 1) Set EBU_USER_PREFIX BEFORE any module load (LUMI doc requirement).
+#    Pin to the same private path the build script used.
 export EBU_USER_PREFIX="$SLURM_SUBMIT_DIR/containers/easybuild"
-PYTORCH_MODULE=${PYTORCH_MODULE:-PyTorch/2.7.1-rocm-6.2.4-python-3.12-singularity-20250827}
 
+# 2) Clean any inherited container env, then load LUMI + the PyTorch module.
+#    Per LUMI docs: at runtime the partition/container partition is NOT needed.
 unset CONTAINERROOT SIF SIFPYTORCH SINGULARITY_BIND
 module purge -f 2>/dev/null || true
 module load LUMI
-module load EasyBuild-user
+
+# 3) Pick newest module installed under the private prefix.
+PYTORCH_MODULE_DIR="$EBU_USER_PREFIX/modules/LUMI/25.03/partition/L/PyTorch"
+if [ -z "${PYTORCH_MODULE:-}" ]; then
+    NEWEST=$(ls -1 "$PYTORCH_MODULE_DIR" 2>/dev/null | grep -E '^[0-9]+\.[0-9]+\.[0-9]+-rocm-.*-singularity-[0-9]{8}\.lua$' | sort -r | head -1 || true)
+    if [ -z "$NEWEST" ]; then
+        echo "ERROR: no PyTorch module under $PYTORCH_MODULE_DIR" >&2
+        echo "Run: bash containers/build_qwen36.sh" >&2
+        exit 1
+    fi
+    PYTORCH_MODULE="PyTorch/${NEWEST%.lua}"
+fi
+
 module load "$PYTORCH_MODULE"
 
-# --- standard env -----------------------------------------------------------
-
+# 4) Standard env.
 export HF_HOME=./hf_cache
 export HF_HUB_CACHE=./hf_cache
 export PYTORCH_HIP_ALLOC_CONF=garbage_collection_threshold:0.9,max_split_size_mb:512
@@ -47,16 +55,15 @@ export MIOPEN_USER_DB_PATH=/tmp/miopen-${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_
 export MIOPEN_CUSTOM_CACHE_DIR=$MIOPEN_USER_DB_PATH
 mkdir -p "$MIOPEN_USER_DB_PATH"
 
-# --- run --------------------------------------------------------------------
-
+# 5) Run. PyTorch 2.6+ module wraps `python` so it executes inside the
+#    container with the user-software.squashfs overlay attached. No
+#    explicit `singularity exec` needed.
 DATASET=${DATASET:-jarnik_boxable}
 SPLIT=${SPLIT:-test}
 N=${N:-27}
 N_TRACES=${N_TRACES:-5}
 SEED=${SEED:-0}
 
-# 2.7.1+ module wraps `python` to run inside the container with the
-# user-software.squashfs overlay attached. No explicit `singularity exec`.
 srun python -u generate_traces.py \
     --model qwen3.6-27b \
     --dataset "$DATASET" \

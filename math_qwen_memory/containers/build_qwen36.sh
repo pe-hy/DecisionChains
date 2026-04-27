@@ -1,75 +1,58 @@
 #!/usr/bin/env bash
 # Build a private LUMI PyTorch container with extra pip packages.
 #
-# LUMI-canonical workflow per
+# Canonical LUMI workflow per:
 #   https://lumi-supercomputer.github.io/LUMI-EasyBuild-docs/p/PyTorch/
-#   https://docs.lumi-supercomputer.eu/software/installing/
-#
-# 1. Set EBU_USER_PREFIX so EasyBuild installs into YOUR scratch (private).
-# 2. Install LUMI's EasyBuild PyTorch 2.7.1 module via `eb`. It uses the
-#    official ROCm pytorch SIF and a writable per-user user-software venv.
-# 3. Load the module → CONTAINERROOT is now your private dir.
-# 4. `pip install -r qwen36_requirements.txt` (host shell — 2.7.1+ wraps pip
-#    so it routes into the container venv automatically).
-# 5. `make-squashfs` → packs the venv into user-software.squashfs.
-# 6. Reload module → squashfs is bound; venv dir can be deleted.
+#   https://docs.lumi-supercomputer.eu/software/installing/easybuild/
 #
 # Two files:
-#   containers/qwen36_requirements.txt  (definition)
-#   containers/build_qwen36.sh          (this script)
-#
-# Run on LUMI login node:
-#   bash containers/build_qwen36.sh
+#   containers/qwen36_requirements.txt   (definition: extra pip packages)
+#   containers/build_qwen36.sh           (this script: how to build)
 
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REQS="$HERE/qwen36_requirements.txt"
 
-# --- per-user EasyBuild prefix: inside this script's own containers/ dir ----
-#
-# The shell's inherited EBU_USER_PREFIX usually points at a project-shared
-# dir (e.g. /project/project_465002050/PH/EASYBUILD); using it would make
-# `eb` install into shared state. We force a path under THIS project, next
-# to the script itself, so everything (modules + SIF + squashfs) is
-# self-contained and removable with `rm -rf containers/easybuild`.
-
+# 1) Set EBU_USER_PREFIX BEFORE any `module load`. Doing it after has side
+#    effects per LUMI docs: "Changing the value of EBU_USER_PREFIX while one
+#    of the LUMI modules is loaded has side effects".
+#    Pin to a project-local path under containers/ (containerised cleanup:
+#    `rm -rf containers/easybuild` removes everything).
 PRIVATE_EBU_PREFIX="$HERE/easybuild"
-
 if [ -n "${EBU_USER_PREFIX:-}" ] && [ "$EBU_USER_PREFIX" != "$PRIVATE_EBU_PREFIX" ]; then
-    echo "[build_qwen36] WARNING: inherited EBU_USER_PREFIX=$EBU_USER_PREFIX"
+    echo "[build_qwen36] inherited EBU_USER_PREFIX=$EBU_USER_PREFIX (shared)"
     echo "[build_qwen36] overriding to project-local: $PRIVATE_EBU_PREFIX"
 fi
 export EBU_USER_PREFIX="$PRIVATE_EBU_PREFIX"
 mkdir -p "$EBU_USER_PREFIX"
 
-# --- bring up LUMI module system + EasyBuild-user (needed for `eb`) --------
-
+# 2) Clear any previously-loaded LUMI modules from the user's shell so they
+#    don't carry stale CONTAINERROOT / SINGULARITY_BIND values.
 unset CONTAINERROOT SIF SIFPYTORCH SINGULARITY_BIND
 module purge -f 2>/dev/null || true
+
+# 3) LUMI docs verbatim: "use the dummy partition `container`, e.g.:
+#       module load LUMI partition/container EasyBuild-user
+#       eb PyTorch-2.7.1-rocm-6.2.4-python-3.12-singularity-20250827.eb"
 module load LUMI
+module load partition/container
 module load EasyBuild-user
 
-# --- discover newest available PyTorch recipe via `eb --search` -----------
-
+# 4) Pick the newest mainline PyTorch container recipe. Recipes live at this
+#    canonical path; reading directly avoids depending on `eb --search`.
+LUMI_PT_RECIPES=/appl/local/containers/LUMI-EasyBuild-containers/easybuild/easyconfigs/p/PyTorch
 if [ -z "${PYTORCH_MODULE:-}" ]; then
-    # Recipes for the LUMI container PyTorch modules live at this canonical
-    # path. `eb --search` only finds them when the right partition is loaded;
-    # bypass the module dance and read the dir directly.
-    LUMI_PT_RECIPES=/appl/local/containers/LUMI-EasyBuild-containers/easybuild/easyconfigs/p/PyTorch
-    echo "[build_qwen36] scanning $LUMI_PT_RECIPES for newest mainline recipe..."
     NEWEST_EB=$(ls "$LUMI_PT_RECIPES"/PyTorch-*-rocm-*-python-*-singularity-*.eb 2>/dev/null \
         | grep -E 'PyTorch-[0-9]+\.[0-9]+\.[0-9]+-rocm-.*-python-.*-singularity-[0-9]{8}\.eb$' \
         | sort -r | head -1 || true)
     if [ -z "$NEWEST_EB" ]; then
-        echo "ERROR: no matching PyTorch recipe in $LUMI_PT_RECIPES." >&2
-        echo "Re-run with: PYTORCH_MODULE=PyTorch/<ver> bash $0" >&2
+        echo "ERROR: no PyTorch container recipe at $LUMI_PT_RECIPES" >&2
         exit 1
     fi
     EB_FILE=$(basename "$NEWEST_EB")
-    EB_BASE=${EB_FILE%.eb}
-    MODULE_VER=${EB_BASE#PyTorch-}
-    PYTORCH_MODULE="PyTorch/$MODULE_VER"
+    PYTORCH_MODULE="PyTorch/${EB_FILE#PyTorch-}"
+    PYTORCH_MODULE="${PYTORCH_MODULE%.eb}"
 else
     EB_FILE="PyTorch-${PYTORCH_MODULE#PyTorch/}.eb"
 fi
@@ -79,37 +62,36 @@ echo "[build_qwen36] target module:  $PYTORCH_MODULE"
 echo "[build_qwen36] eb recipe:      $EB_FILE"
 echo "[build_qwen36] requirements:   $REQS"
 
-# --- install module privately if not already loaded -------------------------
-
-# Try direct load first; if not yet installed under EBU_USER_PREFIX, run `eb`.
+# 5) Install the PyTorch container module under our private prefix (idempotent
+#    — `eb` skips if already installed, unless --rebuild).
 if ! module load "$PYTORCH_MODULE" 2>/dev/null; then
     echo "[build_qwen36] $PYTORCH_MODULE not yet installed. Running EasyBuild..."
-    eb "$EB_FILE" -r
-    module load "$PYTORCH_MODULE"
+    eb "$EB_FILE"
 fi
 
+# 6) Per LUMI docs: "To use the container after installation, the
+#    EasyBuild-user module is not needed nor is the container partition."
+#    Drop them, then load the freshly installed PyTorch module.
+module unload EasyBuild-user 2>/dev/null || true
+module unload partition/container 2>/dev/null || true
+module load "$PYTORCH_MODULE"
+
 echo "[build_qwen36] loaded $PYTORCH_MODULE"
-echo "[build_qwen36] CONTAINERROOT=$CONTAINERROOT  (private; module-managed)"
+echo "[build_qwen36] CONTAINERROOT=$CONTAINERROOT (module-managed, private)"
 echo "[build_qwen36] SIF=$SIF"
 
-# --- post-load sanity --------------------------------------------------------
-
-# 2.7.1 puts python/pip on host PATH directly.
+# 7) Sanity-check ROCm torch from host shell (PyTorch ≥ 2.6 wraps python).
 python -c "
 import torch
 assert torch.version.hip is not None, 'base torch is not ROCm — wrong module?'
 print('base torch:', torch.__version__, 'hip:', torch.version.hip)
 "
 
-# --- install our pip packages ------------------------------------------------
-
-# pip install on host shell routes into $CONTAINERROOT/user-software/venv
-# (module wrapper). Torch is already provided by the SIF and the resolver
-# treats it as satisfied — no CUDA wheel pulled.
+# 8) Install our pip packages. PyTorch ≥ 2.6 wraps pip into the container's
+#    venv automatically. torch is already provided by the SIF → not pulled.
 pip install --upgrade -r "$REQS"
 
-# --- post-install assertions -------------------------------------------------
-
+# 9) Final import-symbol assertions for everything generate_traces/inject use.
 python -c "
 import torch
 assert torch.version.hip is not None, 'ROCm torch lost! refuse to ship'
@@ -133,19 +115,14 @@ from math_verify import parse, verify
 print('math_verify: OK')
 "
 
-# --- bake overlay into squashfs (Lustre-friendly) ---------------------------
-
+# 10) Bake the venv into a SquashFS for fast Lustre access. After this the
+#     user-software dir is redundant and would shadow the squashfs; remove it.
 make-squashfs
-
-# After make-squashfs, the user-software dir is redundant (the squashfs is
-# bound on next module load). Removing it prevents accidental shadow installs.
 rm -rf "$CONTAINERROOT/user-software"
 
-# Reload so the squashfs is mounted.
+# 11) Reload module so the squashfs is bound; final post-squashfs check.
 module unload "$PYTORCH_MODULE"
 module load   "$PYTORCH_MODULE"
-
-# Final import check (this time against the squashfs-mounted overlay).
 python -c "
 import torch, transformers, accelerate, math_verify
 print('post-squashfs:',
@@ -158,6 +135,6 @@ print('post-squashfs:',
 echo
 echo "[build_qwen36] DONE."
 echo "[build_qwen36] artifact: $CONTAINERROOT/user-software.squashfs"
-echo "[build_qwen36] back this up before 'eb' re-installs: cp it to /project/<id>/"
+echo "[build_qwen36] back this up before any 'eb' re-install: cp -a $CONTAINERROOT /project/<id>/"
 echo
 echo "Run with:  sbatch sbatch/generate_traces_27b.sbatch"
