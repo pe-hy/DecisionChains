@@ -36,6 +36,14 @@
 cd "$SLURM_SUBMIT_DIR"
 mkdir -p sbatch/logs
 
+# Container's transformers is too old for Qwen3.6 (model_type='qwen3_5').
+# Install a newer one with --target (--user is blocked inside the venv):
+#   mkdir -p $HOME/lib_overrides
+#   singularity exec $SIF pip install --target=$HOME/lib_overrides \
+#       --upgrade "transformers>=4.50"
+# Prepend the override dir so Python imports the newer transformers first.
+export PYTHONPATH=$HOME/lib_overrides:$PYTHONPATH
+
 export HF_HOME=./hf_cache
 export HF_HUB_CACHE=./hf_cache
 export PYTORCH_HIP_ALLOC_CONF=garbage_collection_threshold:0.9,max_split_size_mb:512
