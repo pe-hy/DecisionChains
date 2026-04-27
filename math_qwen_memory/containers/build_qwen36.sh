@@ -75,18 +75,36 @@ fi
 
 # 6) Per LUMI docs: "To use the container after installation, the
 #    EasyBuild-user module is not needed nor is the container partition."
-#    Drop them, then load the freshly installed PyTorch module.
-module unload EasyBuild-user 2>/dev/null || true
-module unload partition/container 2>/dev/null || true
+#    A full purge is the safest way to eliminate EB-user's python 3.11
+#    leftover that would shadow the container's pip/python wrappers.
+module purge -f 2>/dev/null || true
+module load LUMI
+# Load the partition that the module was installed under (login = L).
+PT_PARTITION=$(find "$EBU_USER_PREFIX/modules/LUMI/" -name "${PYTORCH_MODULE#PyTorch/}.lua" 2>/dev/null \
+    | head -1 \
+    | sed -nE 's|.*/partition/([^/]+)/PyTorch/.*|\1|p')
+[ -n "$PT_PARTITION" ] && module load "partition/$PT_PARTITION"
 module load "$PYTORCH_MODULE"
 
-echo "[build_qwen36] loaded $PYTORCH_MODULE"
+echo "[build_qwen36] loaded $PYTORCH_MODULE (partition/$PT_PARTITION)"
 echo "[build_qwen36] CONTAINERROOT=$CONTAINERROOT (module-managed, private)"
 echo "[build_qwen36] SIF=$SIF"
 
-# 7) Sanity-check ROCm torch from host shell (PyTorch ≥ 2.6 wraps python).
+# 7) Confirm `python` and `pip` are the CONTAINER WRAPPERS, not EB-user's.
+echo "[build_qwen36] which python -> $(which python)"
+echo "[build_qwen36] which pip    -> $(which pip)"
+PYBIN=$(which python)
+PIPBIN=$(which pip)
+if [[ "$PYBIN" == */easybuild/* || "$PIPBIN" == */easybuild/* ]]; then
+    echo "ERROR: python/pip resolves to EasyBuild-user, not the container wrapper." >&2
+    echo "       Wrapper should live under $CONTAINERROOT or /appl/...PyTorch/..." >&2
+    exit 1
+fi
+
+# 8) Sanity-check ROCm torch from host shell (PyTorch ≥ 2.6 wraps python).
 python -c "
-import torch
+import sys, torch
+print('python:', sys.version)
 assert torch.version.hip is not None, 'base torch is not ROCm — wrong module?'
 print('base torch:', torch.__version__, 'hip:', torch.version.hip)
 "
