@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=qwen_gen_traces
-#SBATCH --output=logs/gen_traces_%A_%a.out
-#SBATCH --error=logs/gen_traces_%A_%a.err
+#SBATCH --output=sbatch/logs/gen_traces_%A_%a.out
+#SBATCH --error=sbatch/logs/gen_traces_%A_%a.err
 #SBATCH --time=72:00:00
 #SBATCH --account=project_465002631
 #SBATCH --partition=small-g
@@ -27,7 +27,7 @@
 # Prereq: sbatch sbatch/download_qwen.sbatch (populates ./hf_cache)
 
 cd "$SLURM_SUBMIT_DIR"
-mkdir -p logs
+mkdir -p sbatch/logs
 
 export HF_HOME=./hf_cache
 export HF_HUB_CACHE=./hf_cache
