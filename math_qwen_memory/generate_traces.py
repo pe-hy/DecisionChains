@@ -21,13 +21,47 @@ HF_CACHE.mkdir(exist_ok=True)
 os.environ["HF_HOME"] = str(HF_CACHE)
 os.environ["HF_HUB_CACHE"] = str(HF_CACHE)
 
-MODEL_ID = "Qwen/Qwen3-8B"
 DATA_ROOT = ROOT / "data"
 
 # Default system prompt — Qwen3 model-card recommended phrasing for math.
 SYSTEM_PROMPT = (
     "Please reason step by step, and put your final answer within \\boxed{}."
 )
+
+# Per-model defaults from each model's HuggingFace card.
+MODELS = {
+    "qwen3-8b": {
+        "id": "Qwen/Qwen3-8B",
+        # Thinking-mode card recipe: T=0.6, top_p=0.95, top_k=20, min_p=0.
+        "temperature": 0.6,
+        "top_p": 0.95,
+        "top_k": 20,
+        "min_p": 0.0,
+        # 16384 default; bump to 38912 for benchmark-grade math/programming.
+        "max_new_tokens": 16384,
+        # 8B fits one MI250X GCD (~16GB).
+        "device_map": "cuda:0",
+    },
+    "qwen3.6-27b": {
+        "id": "Qwen/Qwen3.6-27B",
+        # Thinking-mode default: T=1.0 (general). For coding precision drop to
+        # 0.6. Math is general-thinking territory → keep 1.0.
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "min_p": 0.0,
+        # 16384 here, not the card's 32k default. KV cache at 32k pushes one
+        # 64 GB MI250X GCD over; at 16k bf16 weights (~54 GB) + KV (~5 GB
+        # with GQA) + framework leaves ~5 GB headroom. If you need longer
+        # outputs, switch device_map to "auto" and request --gpus=2.
+        "max_new_tokens": 16384,
+        "device_map": "cuda:0",
+    },
+}
+
+# Backwards-compat: inject.py / inject_chunks.py import MODEL_ID. Default keeps
+# them on Qwen3-8B without code changes.
+MODEL_ID = MODELS["qwen3-8b"]["id"]
 
 DATASETS = {
     "math": {
@@ -169,22 +203,25 @@ def compute_token_entropy(logits):
 
 
 def decode_with_entropy(model, tok, input_ids, *, max_new_tokens, temperature,
-                        top_p, top_k, eos_ids):
+                        top_p, top_k, eos_ids, min_p=0.0):
     """Manual decode loop. Stores only scalars — OOM-safe at 16K context.
 
-    Computes entropy on RAW logits at each step; applies temp/top_p/top_k
+    Computes entropy on RAW logits at each step; applies temp/top_p/top_k/min_p
     for sampling only. Returns (gen_ids[list[int]], entropies[list[float]]).
     """
     import torch
     from transformers import (
         LogitsProcessorList, TemperatureLogitsWarper,
-        TopPLogitsWarper, TopKLogitsWarper,
+        TopPLogitsWarper, TopKLogitsWarper, MinPLogitsWarper,
     )
-    warpers = LogitsProcessorList([
+    procs = [
         TemperatureLogitsWarper(temperature),
         TopPLogitsWarper(top_p),
         TopKLogitsWarper(top_k),
-    ])
+    ]
+    if min_p > 0.0:
+        procs.append(MinPLogitsWarper(min_p))
+    warpers = LogitsProcessorList(procs)
     gen_ids, entropies = [], []
     attn = torch.ones_like(input_ids)
     past = None
@@ -224,6 +261,18 @@ def generate(args):
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
+    mcfg = MODELS[args.model]
+    model_id = mcfg["id"]
+    # CLI flags override per-model defaults; sentinel None means "use default".
+    temperature = mcfg["temperature"] if args.temperature is None else args.temperature
+    top_p = mcfg["top_p"] if args.top_p is None else args.top_p
+    top_k = mcfg["top_k"] if args.top_k is None else args.top_k
+    min_p = mcfg.get("min_p", 0.0) if args.min_p is None else args.min_p
+    max_new_tokens = (
+        mcfg["max_new_tokens"] if args.max_new_tokens is None else args.max_new_tokens
+    )
+
+    model_suffix = f"_{args.model}" if args.model != "qwen3-8b" else ""
     shard_suffix = (
         f"_shard{args.shard_idx}of{args.n_shards}" if args.n_shards > 1 else ""
     )
@@ -232,17 +281,20 @@ def generate(args):
         Path(args.out)
         if args.out
         else ROOT / "outputs" / "pilot"
-        / f"{args.dataset}_{args.split}_n{args.n}{traces_suffix}{shard_suffix}.jsonl"
+        / f"{args.dataset}_{args.split}_n{args.n}{traces_suffix}{model_suffix}{shard_suffix}.jsonl"
     )
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    print(f"Loading {MODEL_ID} (cache: {HF_CACHE})")
-    tok = AutoTokenizer.from_pretrained(MODEL_ID, cache_dir=str(HF_CACHE))
+    device_map = mcfg.get("device_map", "cuda:0")
+    print(f"Loading {model_id} (cache: {HF_CACHE}, device_map={device_map})")
+    print(f"sampling: T={temperature} top_p={top_p} top_k={top_k} "
+          f"min_p={min_p} max_new={max_new_tokens}")
+    tok = AutoTokenizer.from_pretrained(model_id, cache_dir=str(HF_CACHE))
     model = AutoModelForCausalLM.from_pretrained(
-        MODEL_ID,
+        model_id,
         cache_dir=str(HF_CACHE),
         torch_dtype=torch.bfloat16,
-        device_map="cuda:0",
+        device_map=device_map,
         attn_implementation="sdpa",
     )
     model.eval()
@@ -304,10 +356,11 @@ def generate(args):
 
             gen_list, entropies = decode_with_entropy(
                 model, tok, inputs,
-                max_new_tokens=args.max_new_tokens,
-                temperature=args.temperature,
-                top_p=args.top_p,
-                top_k=args.top_k,
+                max_new_tokens=max_new_tokens,
+                temperature=temperature,
+                top_p=top_p,
+                top_k=top_k,
+                min_p=min_p,
                 eos_ids=eos_ids,
             )
             torch.cuda.empty_cache()
@@ -323,6 +376,7 @@ def generate(args):
                 "idx": idx,
                 "trace_idx": trace_idx,
                 "seed": seed,
+                "model": args.model,
                 "problem": ex["problem"],
                 "gold": ex["gold"],
                 "generation": gen_text,
@@ -377,10 +431,15 @@ def main():
     ap.add_argument("--split", choices=["train", "test"], default="test")
     ap.add_argument("--n", type=int, default=5)
     ap.add_argument("--out", default=None)
-    ap.add_argument("--max_new_tokens", type=int, default=8192)
-    ap.add_argument("--temperature", type=float, default=0.6)
-    ap.add_argument("--top_p", type=float, default=0.95)
-    ap.add_argument("--top_k", type=int, default=20)
+    ap.add_argument("--model", choices=list(MODELS), default="qwen3-8b",
+                    help="model registry key; sampling defaults from card")
+    # Sampling args default to None so per-model card defaults apply.
+    # Pass an explicit value to override the model default.
+    ap.add_argument("--max_new_tokens", type=int, default=None)
+    ap.add_argument("--temperature", type=float, default=None)
+    ap.add_argument("--top_p", type=float, default=None)
+    ap.add_argument("--top_k", type=int, default=None)
+    ap.add_argument("--min_p", type=float, default=None)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--rescore", default=None,
                     help="path to existing JSONL to re-grade in place")
