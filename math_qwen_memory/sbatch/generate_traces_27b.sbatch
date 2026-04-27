@@ -13,39 +13,37 @@
 #SBATCH --array=0-7
 
 # Qwen3.6-27B on LUMI MI250X (one GCD, 64 GB).
-# bf16 weights ~54 GB + KV ~5 GB (16k context, GQA) + framework ~4 GB =
-# ~63 GB peak. Fits one 64 GB GCD with ~1-5 GB headroom.
-# If you need >20k context output, weights+KV will spill; either:
-#   - bump `--gpus=2` and switch model device_map to "auto" (TP across both
-#     GCDs of the MI250X module = 128 GB aggregate)
-#   - quantize fp8/int8
+# Uses the LUMI EasyBuild PyTorch module + the squashfs overlay built by
+# containers/build_qwen36.sh (which adds transformers>=4.50, accelerate,
+# math_verify on top of the ROCm pytorch base — required for Qwen3.6's
+# `qwen3_5` model_type).
+#
+# Build the overlay ONCE before submitting (login node):
+#   bash containers/build_qwen36.sh
+#
+# Memory budget at 16k context: ~54 GB weights + ~5 GB KV (GQA) + ~4 GB
+# framework = ~63 GB peak → fits one 64 GB GCD.
 #
 # Outputs: outputs/pilot/${DATASET}_${SPLIT}_n${N}_t${N_TRACES}_qwen3.6-27b_shard{0..7}of8.jsonl
-# Merge:
-#   cat outputs/pilot/${DATASET}_${SPLIT}_n${N}_t${N_TRACES}_qwen3.6-27b_shard*of8.jsonl \
-#       > outputs/pilot/${DATASET}_${SPLIT}_n${N}_t${N_TRACES}_qwen3.6-27b.jsonl
-#
-# Submit examples:
-#   DATASET=jarnik_boxable N=27 sbatch sbatch/generate_traces_27b.sbatch
-#   DATASET=aime2026 N=30 sbatch sbatch/generate_traces_27b.sbatch
-#   DATASET=jarnik N=72 sbatch sbatch/generate_traces_27b.sbatch
-#
-# Prereq: Qwen3.6-27B downloaded into ./hf_cache (re-run download_qwen.sbatch
-# adapted for the 27B model id, or pre-fetch with huggingface_hub).
 
 cd "$SLURM_SUBMIT_DIR"
 mkdir -p sbatch/logs
 
-# Use the extended SIF built by containers/build_qwen36.sh.
-# Build once with:
-#   bash containers/build_qwen36.sh
-# That bakes newer transformers + accelerate into a copy of the LUMI
-# ROCm PyTorch sif (output: $SCRATCH/sif/qwen36.sif). No PYTHONPATH hacks.
-SIF=${QWEN36_SIF:-/pfs/lustrep4/scratch/project_465002631/Petr/sif/qwen36.sif}
-if [ ! -f "$SIF" ]; then
-    echo "ERROR: $SIF not found. Run containers/build_qwen36.sh first." >&2
+# --- load LUMI PyTorch module + attach the overlay built earlier ------------
+
+PYTORCH_MODULE=${PYTORCH_MODULE:-PyTorch/2.7.0-rocm-6.2.4-python-3.12-singularity-20250527}
+SCRATCH=${SCRATCH:-/pfs/lustrep4/scratch/project_465002631/Petr}
+export CONTAINERROOT=${CONTAINERROOT:-$SCRATCH/qwen36_container}
+
+if [ ! -d "$CONTAINERROOT/user-software" ] && [ ! -f "$CONTAINERROOT/user-software.squashfs" ]; then
+    echo "ERROR: $CONTAINERROOT has no overlay. Run containers/build_qwen36.sh first." >&2
     exit 1
 fi
+
+module use /appl/local/csc/modulefiles
+module load "$PYTORCH_MODULE"
+
+# --- standard env -----------------------------------------------------------
 
 export HF_HOME=./hf_cache
 export HF_HUB_CACHE=./hf_cache
@@ -54,21 +52,22 @@ export MIOPEN_USER_DB_PATH=/tmp/miopen-${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_
 export MIOPEN_CUSTOM_CACHE_DIR=$MIOPEN_USER_DB_PATH
 mkdir -p $MIOPEN_USER_DB_PATH
 
+# --- run --------------------------------------------------------------------
+
 DATASET=${DATASET:-jarnik_boxable}
 SPLIT=${SPLIT:-test}
 N=${N:-27}
 N_TRACES=${N_TRACES:-5}
 SEED=${SEED:-0}
-# leave max_new_tokens, temperature, top_p, top_k, min_p unset →
-# generate_traces.py uses Qwen3.6-27B card defaults (T=1.0, max_new=16384).
 
-singularity exec $SIF \
-    python -u generate_traces.py \
-        --model qwen3.6-27b \
-        --dataset "$DATASET" \
-        --split "$SPLIT" \
-        --n "$N" \
-        --n-traces "$N_TRACES" \
-        --seed "$SEED" \
-        --shard-idx $SLURM_ARRAY_TASK_ID \
-        --n-shards 8
+# Module's wrapper makes `python` the container's python with the overlay
+# bound — no explicit `singularity exec $SIF` needed.
+python -u generate_traces.py \
+    --model qwen3.6-27b \
+    --dataset "$DATASET" \
+    --split "$SPLIT" \
+    --n "$N" \
+    --n-traces "$N_TRACES" \
+    --seed "$SEED" \
+    --shard-idx $SLURM_ARRAY_TASK_ID \
+    --n-shards 8

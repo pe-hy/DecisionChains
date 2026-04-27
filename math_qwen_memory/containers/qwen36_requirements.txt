@@ -1,0 +1,21 @@
+# Definition: extra pip packages baked into the LUMI ROCm PyTorch container.
+# Consumed by containers/build_qwen36.sh.
+#
+# Why each one:
+#   transformers>=4.50         model_type='qwen3_5' recognition (Qwen3.6)
+#   accelerate>=0.30           required by newer transformers for device_map
+#   tokenizers>=0.20           ABI-compatible with newer transformers
+#   safetensors>=0.4           weight format
+#   huggingface-hub>=0.23      HF cache + downloads
+#   math_verify                primary boxed-answer grader (pulls sympy etc.)
+#
+# Torch is NOT listed: the LUMI base image already provides the ROCm build,
+# and `module load PyTorch/...` exposes it. Pulling torch from PyPI would
+# overwrite the ROCm wheel with a CUDA wheel and silently break the GPU.
+
+transformers>=4.50
+accelerate>=0.30
+tokenizers>=0.20
+safetensors>=0.4
+huggingface-hub>=0.23
+math_verify
