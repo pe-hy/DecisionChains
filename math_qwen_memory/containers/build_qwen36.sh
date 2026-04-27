@@ -43,34 +43,30 @@ fi
 export EBU_USER_PREFIX="$PRIVATE_EBU_PREFIX"
 mkdir -p "$EBU_USER_PREFIX"
 
-# --- discover newest available PyTorch recipe (rocm + singularity) ---------
+# --- bring up LUMI module system + EasyBuild-user (needed for `eb`) --------
 
-EB_RECIPE_DIRS=(
-    /appl/lumi/LUMI-EasyBuild-contrib/easybuild/easyconfigs
-    /appl/lumi/LUMI-SoftwareStack/easybuild/easyconfigs
-    /appl/lumi/mgmt/ebfiles_repo/LUMI-25.03/LUMI-L
-    /appl/lumi/mgmt/ebfiles_repo/LUMI-25.03/LUMI-common
-)
+unset CONTAINERROOT SIF SIFPYTORCH SINGULARITY_BIND
+module purge -f 2>/dev/null || true
+module load LUMI
+module load EasyBuild-user
+
+# --- discover newest available PyTorch recipe via `eb --search` -----------
 
 if [ -z "${PYTORCH_MODULE:-}" ]; then
-    # find newest PyTorch-*-rocm-*-python-3.*-singularity-*.eb anywhere
-    NEWEST_EB=""
-    for d in "${EB_RECIPE_DIRS[@]}"; do
-        [ -d "$d" ] || continue
-        cand=$(find "$d" -maxdepth 6 -name 'PyTorch-*-rocm-*-python-3.*-singularity-*.eb' 2>/dev/null | sort -r | head -1)
-        if [ -n "$cand" ] && { [ -z "$NEWEST_EB" ] || [[ "$cand" > "$NEWEST_EB" ]]; }; then
-            NEWEST_EB="$cand"
-        fi
-    done
+    echo "[build_qwen36] searching EasyBuild for PyTorch...singularity recipes..."
+    # `eb --search` prints lines like " * /path/to/PyTorch-...eb"
+    NEWEST_EB=$(eb --search 'PyTorch-.*-rocm-.*-python-.*-singularity-.*\.eb' 2>/dev/null \
+                  | grep -oE '/\S+\.eb' \
+                  | sort -r | head -1 || true)
     if [ -z "$NEWEST_EB" ]; then
-        echo "ERROR: no PyTorch-*-rocm-*-python-3.*-singularity-*.eb found in:" >&2
-        printf '  %s\n' "${EB_RECIPE_DIRS[@]}" >&2
-        echo "Pass PYTORCH_MODULE=PyTorch/<ver> bash $0 with a known module name." >&2
+        echo "ERROR: no PyTorch-*-rocm-*-python-*-singularity-*.eb recipe found." >&2
+        echo "Try:  eb --search PyTorch    (lists all recipes)" >&2
+        echo "Then re-run with: PYTORCH_MODULE=PyTorch/<ver> bash $0" >&2
         exit 1
     fi
     EB_FILE=$(basename "$NEWEST_EB")
-    EB_BASE=${EB_FILE%.eb}                       # e.g. PyTorch-2.7.1-rocm-...
-    MODULE_VER=${EB_BASE#PyTorch-}               # e.g. 2.7.1-rocm-...
+    EB_BASE=${EB_FILE%.eb}                       # PyTorch-X.Y.Z-rocm-...
+    MODULE_VER=${EB_BASE#PyTorch-}               # X.Y.Z-rocm-...
     PYTORCH_MODULE="PyTorch/$MODULE_VER"
 else
     EB_FILE="PyTorch-${PYTORCH_MODULE#PyTorch/}.eb"
@@ -81,16 +77,9 @@ echo "[build_qwen36] target module:  $PYTORCH_MODULE"
 echo "[build_qwen36] eb recipe:      $EB_FILE"
 echo "[build_qwen36] requirements:   $REQS"
 
-# Drop any inherited PyTorch / shared-CONTAINERROOT to avoid bind-leak.
-unset CONTAINERROOT SIF SIFPYTORCH SINGULARITY_BIND
-module purge -f 2>/dev/null || true
-module load LUMI
+# --- install module privately if not already loaded -------------------------
 
-# --- install module privately if not already installed ----------------------
-
-# `module is-avail` doesn't reliably distinguish private vs system modules,
-# so just try `module load`. If it fails, run `eb` to install.
-module load EasyBuild-user
+# Try direct load first; if not yet installed under EBU_USER_PREFIX, run `eb`.
 if ! module load "$PYTORCH_MODULE" 2>/dev/null; then
     echo "[build_qwen36] $PYTORCH_MODULE not yet installed. Running EasyBuild..."
     eb "$EB_FILE" -r
