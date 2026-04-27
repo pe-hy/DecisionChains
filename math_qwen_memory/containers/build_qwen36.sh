@@ -178,7 +178,7 @@ pip install --no-cache-dir -r "$REQS"
 #    still resolve to /opt/miniconda3/... pip silently skipped — abort.
 # ---------------------------------------------------------------------------
 echo "[pip] post-install locations:"
-for pkg in transformers accelerate tokenizers safetensors huggingface_hub math_verify; do
+for pkg in transformers accelerate tokenizers safetensors huggingface_hub math_verify flash_linear_attention; do
     loc=$(pip show "$pkg" 2>/dev/null | awk '/^Location:/ {print $2}')
     printf '    %-18s -> %s\n' "$pkg" "${loc:-<missing>}"
 done
@@ -188,7 +188,7 @@ done
 # it won't be in the squashfs and the slurm job will fail with the same
 # "model_type=qwen3_5 unknown" error we just hit.
 escaped=()
-for pkg in transformers tokenizers accelerate safetensors huggingface_hub math_verify; do
+for pkg in transformers tokenizers accelerate safetensors huggingface_hub math_verify flash_linear_attention; do
     loc=$(pip show "$pkg" 2>/dev/null | awk '/^Location:/ {print $2}')
     case "$loc" in
         */user-software/*) ;;  # OK
@@ -237,6 +237,21 @@ if candidates:
           f'arch={cfg.architectures!r} OK')
 else:
     print(f'[pre-squash] (skip: no Qwen3.6-27B snapshot under {hf_cache})')
+
+# Qwen3.6 fast-path symbol availability.
+# Note: pip pkg is `flash-linear-attention`, importable as `fla`.
+import fla, importlib.metadata
+print('[pre-squash] flash-linear-attention:',
+      importlib.metadata.version('flash-linear-attention'),
+      'fla.__file__:', fla.__file__)
+from causal_conv1d import causal_conv1d_fn, causal_conv1d_update
+from fla.ops.gated_delta_rule import (
+    chunk_gated_delta_rule, fused_recurrent_gated_delta_rule,
+)
+fast = all((causal_conv1d_fn, causal_conv1d_update,
+            chunk_gated_delta_rule, fused_recurrent_gated_delta_rule))
+assert fast, 'Qwen3.6 fast path NOT available before squash'
+print('[pre-squash] Qwen3.6 fast path: AVAILABLE')
 PY
 
 # ---------------------------------------------------------------------------
@@ -281,6 +296,27 @@ if candidates:
     print(f'[POST-SQUASH] Qwen3.6-27B AutoConfig: model_type={cfg.model_type!r} OK')
 else:
     print('[POST-SQUASH] (skip Qwen3.6 config check: snapshot not present)')
+
+# Qwen3.6 fast-path check.  modeling_qwen3_5.py builds is_fast_path_available
+# from these four symbols:
+#   causal_conv1d_fn, causal_conv1d_update           (causal-conv1d, in conda)
+#   chunk_gated_delta_rule, fused_recurrent_gated_delta_rule  (fla, in venv)
+# If any is None the model falls back to torch and generation is ~10x slower.
+import fla, importlib.metadata
+print('[POST-SQUASH] flash-linear-attention:',
+      importlib.metadata.version('flash-linear-attention'),
+      'fla.__file__:', fla.__file__)
+print('[POST-SQUASH] causal-conv1d:',
+      importlib.metadata.version('causal-conv1d'))
+from causal_conv1d import causal_conv1d_fn, causal_conv1d_update
+from fla.modules import FusedRMSNormGated
+from fla.ops.gated_delta_rule import (
+    chunk_gated_delta_rule, fused_recurrent_gated_delta_rule,
+)
+fast = all((causal_conv1d_fn, causal_conv1d_update,
+            chunk_gated_delta_rule, fused_recurrent_gated_delta_rule))
+assert fast, 'Qwen3.6 fast path is NOT available — one of the 4 syms is None'
+print('[POST-SQUASH] Qwen3.6 fast path: AVAILABLE (fla + causal-conv1d both wired)')
 print('[POST-SQUASH] all imports OK from squashfs')
 PY
 

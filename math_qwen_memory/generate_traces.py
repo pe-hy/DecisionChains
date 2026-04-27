@@ -344,12 +344,20 @@ def generate(args):
             {"role": "system", "content": sys_prompt},
             {"role": "user", "content": ex["problem"]},
         ]
-        inputs = tok.apply_chat_template(
+        # transformers 5.x changed apply_chat_template: even with
+        # return_tensors="pt" it returns a BatchEncoding when return_dict
+        # defaults to True (Qwen3-style chat templates set this).  We want a
+        # plain LongTensor of token ids for decode_with_entropy.
+        _ct_out = tok.apply_chat_template(
             messages,
             add_generation_prompt=True,
             return_tensors="pt",
             enable_thinking=True,
-        ).to(model.device)
+        )
+        if hasattr(_ct_out, "input_ids"):
+            inputs = _ct_out["input_ids"].to(model.device)
+        else:
+            inputs = _ct_out.to(model.device)
 
         eos_ids = {tok.eos_token_id}
         if tok.pad_token_id is not None:

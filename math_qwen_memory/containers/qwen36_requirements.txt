@@ -19,6 +19,16 @@
 #                              0.6.2 so >0.6.2 is required to force install
 #   huggingface-hub>=0.30      modern hf_hub_download / snapshot_download
 #   math_verify                primary boxed-answer grader (pulls sympy etc.)
+#   flash-linear-attention     pure-Python wheel + Triton kernels.  Required
+#                              by Qwen3.6 (qwen3_5 model_type) for the
+#                              gated-delta-rule fast path; without it
+#                              modeling_qwen3_5.py prints
+#                              "fast path is not available, falling back
+#                              to torch implementation" at load time and
+#                              generation runs ~10x slower.  The other
+#                              dep, causal-conv1d, is already pre-built
+#                              for ROCm in the SIF's conda env (1.5.2);
+#                              we only need fla on top.
 #
 # Torch is NOT listed: the LUMI base image already provides the ROCm build.
 # Pulling torch from PyPI would overwrite the ROCm wheel with a CUDA wheel
@@ -30,3 +40,4 @@ accelerate>=1.10
 safetensors>=0.7
 huggingface-hub>=0.30
 math_verify
+flash-linear-attention>=0.5.0
