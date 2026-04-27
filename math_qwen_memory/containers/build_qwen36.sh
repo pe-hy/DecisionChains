@@ -26,10 +26,21 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REQS="$HERE/qwen36_requirements.txt"
 
-# --- per-user EasyBuild prefix (in scratch — HOME has 25 GB quota) ----------
+# --- per-user EasyBuild prefix: inside this script's own containers/ dir ----
+#
+# The shell's inherited EBU_USER_PREFIX usually points at a project-shared
+# dir (e.g. /project/project_465002050/PH/EASYBUILD); using it would make
+# `eb` install into shared state. We force a path under THIS project, next
+# to the script itself, so everything (modules + SIF + squashfs) is
+# self-contained and removable with `rm -rf containers/easybuild`.
 
-SCRATCH=${SCRATCH:-/pfs/lustrep4/scratch/project_465002631/Petr}
-export EBU_USER_PREFIX="${EBU_USER_PREFIX:-$SCRATCH/EasyBuild}"
+PRIVATE_EBU_PREFIX="$HERE/easybuild"
+
+if [ -n "${EBU_USER_PREFIX:-}" ] && [ "$EBU_USER_PREFIX" != "$PRIVATE_EBU_PREFIX" ]; then
+    echo "[build_qwen36] WARNING: inherited EBU_USER_PREFIX=$EBU_USER_PREFIX"
+    echo "[build_qwen36] overriding to project-local: $PRIVATE_EBU_PREFIX"
+fi
+export EBU_USER_PREFIX="$PRIVATE_EBU_PREFIX"
 mkdir -p "$EBU_USER_PREFIX"
 
 # --- module name (override via PYTORCH_MODULE if a newer one ships) ---------

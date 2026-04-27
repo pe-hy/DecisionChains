@@ -27,8 +27,9 @@ mkdir -p sbatch/logs
 
 # --- private LUMI EasyBuild prefix + PyTorch module -------------------------
 
-SCRATCH=${SCRATCH:-/pfs/lustrep4/scratch/project_465002631/Petr}
-export EBU_USER_PREFIX=${EBU_USER_PREFIX:-$SCRATCH/EasyBuild}
+# Force private prefix inside this project's containers/ dir; ignore any
+# shared-path value inherited from .bashrc.
+export EBU_USER_PREFIX="$SLURM_SUBMIT_DIR/containers/easybuild"
 PYTORCH_MODULE=${PYTORCH_MODULE:-PyTorch/2.7.1-rocm-6.2.4-python-3.12-singularity-20250827}
 
 unset CONTAINERROOT SIF SIFPYTORCH SINGULARITY_BIND
