@@ -1,0 +1,71 @@
+Bootstrap: localimage
+From: {{BASE_SIF}}
+
+# Apptainer/Singularity definition for the Qwen3.6 inference container.
+# Extends LUMI's official ROCm PyTorch image (preserves the ROCm torch build
+# at /user-software/venv/pytorch) with newer transformers + accelerate so the
+# `qwen3_5` model_type used by Qwen3.6 is recognised.
+#
+# Build via the companion script: containers/build_qwen36.sh
+# It substitutes {{BASE_SIF}} with the resolved LUMI base image path before
+# running apptainer build.
+
+%post
+    set -eux
+
+    # Use the container's existing python venv that has ROCm-built torch.
+    # NEVER create a new venv — would cause CUDA-vs-ROCm torch shadowing.
+    export PATH=/user-software/venv/pytorch/bin:$PATH
+
+    # --no-deps keeps pip from pulling a CUDA torch wheel as a transitive
+    # dependency (which would shadow the container's ROCm torch and silently
+    # break GPU). Each package below is upgraded *in place* in the existing
+    # venv.
+    pip install --upgrade --no-deps \
+        "transformers>=4.50" \
+        "accelerate>=0.30" \
+        "tokenizers>=0.20" \
+        "safetensors>=0.4" \
+        "huggingface-hub>=0.23"
+
+    # math_verify is the primary grader for boxed numeric/expression answers.
+    # It pulls latex2sympy2_extended + sympy + antlr4 — install with deps
+    # because the base container does not bundle these.
+    pip install --upgrade math_verify
+
+    # Sanity-check: torch must remain ROCm; transformers must be the new ver;
+    # every import path used by generate_traces / inject / inject_chunks must
+    # resolve. If any of these fail, the build aborts → no surprise at runtime.
+    python -c "
+import torch
+assert torch.version.hip is not None, 'ROCm torch lost! refuse to ship'
+print('torch:', torch.__version__, 'hip:', torch.version.hip)
+
+import transformers, accelerate, tokenizers, safetensors, huggingface_hub
+print('transformers:', transformers.__version__)
+print('accelerate:', accelerate.__version__)
+print('tokenizers:', tokenizers.__version__)
+print('safetensors:', safetensors.__version__)
+print('huggingface_hub:', huggingface_hub.__version__)
+
+from transformers import (
+    AutoModelForCausalLM, AutoTokenizer,
+    LogitsProcessorList, TemperatureLogitsWarper,
+    TopPLogitsWarper, TopKLogitsWarper, MinPLogitsWarper,
+)
+print('transformers symbols: OK')
+
+from math_verify import parse, verify
+print('math_verify: OK')
+"
+
+%environment
+    # Make the upgraded venv the default python at runtime.
+    export PATH=/user-software/venv/pytorch/bin:$PATH
+
+%runscript
+    exec "$@"
+
+%labels
+    Project math_qwen_memory
+    Purpose Qwen3.6-27B inference on LUMI MI250X

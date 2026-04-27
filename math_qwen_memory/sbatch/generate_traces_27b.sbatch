@@ -36,13 +36,16 @@
 cd "$SLURM_SUBMIT_DIR"
 mkdir -p sbatch/logs
 
-# Container's transformers is too old for Qwen3.6 (model_type='qwen3_5').
-# Install a newer one with --target (--user is blocked inside the venv):
-#   mkdir -p $HOME/lib_overrides
-#   singularity exec $SIF pip install --target=$HOME/lib_overrides \
-#       --upgrade "transformers>=4.50"
-# Prepend the override dir so Python imports the newer transformers first.
-export PYTHONPATH=$HOME/lib_overrides:$PYTHONPATH
+# Use the extended SIF built by containers/build_qwen36.sh.
+# Build once with:
+#   bash containers/build_qwen36.sh
+# That bakes newer transformers + accelerate into a copy of the LUMI
+# ROCm PyTorch sif (output: $SCRATCH/sif/qwen36.sif). No PYTHONPATH hacks.
+SIF=${QWEN36_SIF:-/pfs/lustrep4/scratch/project_465002631/Petr/sif/qwen36.sif}
+if [ ! -f "$SIF" ]; then
+    echo "ERROR: $SIF not found. Run containers/build_qwen36.sh first." >&2
+    exit 1
+fi
 
 export HF_HOME=./hf_cache
 export HF_HUB_CACHE=./hf_cache
@@ -57,7 +60,7 @@ N=${N:-27}
 N_TRACES=${N_TRACES:-5}
 SEED=${SEED:-0}
 # leave max_new_tokens, temperature, top_p, top_k, min_p unset →
-# generate_traces.py uses Qwen3.6-27B card defaults (T=1.0, max_new=32768).
+# generate_traces.py uses Qwen3.6-27B card defaults (T=1.0, max_new=16384).
 
 singularity exec $SIF \
     python -u generate_traces.py \
