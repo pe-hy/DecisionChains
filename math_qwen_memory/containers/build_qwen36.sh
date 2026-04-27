@@ -111,26 +111,34 @@ assert torch.version.hip is not None, 'base torch is not ROCm — wrong module?'
 print('base torch:', torch.__version__, 'hip:', torch.version.hip)
 "
 
-# 8) Install our pip packages. PyTorch ≥ 2.6 wraps pip into the container's
-#    venv automatically. torch is already provided by the SIF → not pulled.
+# 8) Create the writable venv that the pip wrapper expects. Without this,
+#    pip's target /user-software/venv/pytorch/lib/python3.12/site-packages
+#    doesn't exist → wrapper falls back to ~/.local (we then can't squash).
+#    --system-site-packages so the venv inherits the SIF's torch + base deps.
+mkdir -p "$CONTAINERROOT/user-software"
+if [ ! -f "$CONTAINERROOT/user-software/venv/pytorch/pyvenv.cfg" ]; then
+    echo "[build_qwen36] creating writable venv at /user-software/venv/pytorch"
+    python -m venv --system-site-packages /user-software/venv/pytorch
+fi
+
+# 9) Install our pip packages. With the venv now in place, the wrapper writes
+#    into $CONTAINERROOT/user-software/venv/pytorch/lib/python3.12/site-packages.
 pip install --upgrade -r "$REQS"
 
-# 8b) Diagnostics: where did pip actually put things? Container's base SIF
-#     ships transformers/etc; "Requirement already satisfied" means pip
-#     skipped. We need at least one of our requirements to live in
-#     $CONTAINERROOT/user-software so make-squashfs has something to pack.
+# 9b) Diagnostic: confirm install location ended up under $CONTAINERROOT.
 echo "[build_qwen36] pip install locations:"
 for pkg in transformers accelerate math_verify huggingface_hub; do
     loc=$(pip show "$pkg" 2>/dev/null | awk '/^Location:/ {print $2}')
     echo "    $pkg -> $loc"
 done
 
-if [ ! -d "$CONTAINERROOT/user-software" ]; then
-    echo "[build_qwen36] user-software/ empty — base SIF already had everything."
-    echo "[build_qwen36] forcing reinstall of math_verify into the user venv to seed it"
-    # math_verify is the package least likely to already be in the base SIF.
-    # --force-reinstall makes pip write a fresh copy regardless of cached state.
-    pip install --upgrade --force-reinstall --no-deps math_verify
+# Hard assert: at least transformers must live under user-software, otherwise
+# make-squashfs has nothing to pack.
+TR_LOC=$(pip show transformers 2>/dev/null | awk '/^Location:/ {print $2}')
+if [[ "$TR_LOC" != */user-software/* ]]; then
+    echo "ERROR: transformers ended up at $TR_LOC, not under /user-software/." >&2
+    echo "       The wrapper venv is not capturing pip writes." >&2
+    exit 1
 fi
 
 # 9) Final import-symbol assertions for everything generate_traces/inject use.
