@@ -191,20 +191,29 @@ def decode_with_entropy(model, tok, input_ids, *, max_new_tokens, temperature,
     return gen_ids, entropies
 
 
+def trace_seed(base_seed: int, idx: int, trace_idx: int) -> int:
+    """Deterministic per-(problem, trace) seed.
+
+    Replay key, not a guarantee of bit-identical output: same seed on different
+    hardware (A100 vs MI250x) or attn impl can still diverge. 1000 head-room
+    per problem covers reasonable n_traces growth.
+    """
+    return base_seed * 1_000_000 + idx * 1_000 + trace_idx
+
+
 def generate(args):
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
-    torch.manual_seed(args.seed)
-
     shard_suffix = (
         f"_shard{args.shard_idx}of{args.n_shards}" if args.n_shards > 1 else ""
     )
+    traces_suffix = f"_t{args.n_traces}" if args.n_traces > 1 else ""
     out_path = (
         Path(args.out)
         if args.out
         else ROOT / "outputs" / "pilot"
-        / f"{args.dataset}_{args.split}_n{args.n}{shard_suffix}.jsonl"
+        / f"{args.dataset}_{args.split}_n{args.n}{traces_suffix}{shard_suffix}.jsonl"
     )
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -227,25 +236,28 @@ def generate(args):
         if i % args.n_shards == args.shard_idx
     ]
     print(f"shard {args.shard_idx}/{args.n_shards}: {len(examples)} of "
-          f"{len(all_examples)} examples", flush=True)
+          f"{len(all_examples)} examples, n_traces={args.n_traces}", flush=True)
 
-    # resume: skip indices already in the output file
-    done_idx = set()
+    # resume: skip (idx, trace_idx) pairs already saved
+    # backward-compat: old single-trace files lack trace_idx → treated as 0
+    done_pairs = set()
     if out_path.exists():
         with open(out_path) as f:
             for line in f:
                 try:
-                    done_idx.add(json.loads(line)["idx"])
+                    r = json.loads(line)
+                    done_pairs.add((r["idx"], r.get("trace_idx", 0)))
                 except Exception:
                     pass
-        if done_idx:
-            print(f"resuming — {len(done_idx)} already saved", flush=True)
+        if done_pairs:
+            print(f"resuming — {len(done_pairs)} (idx,trace) already saved",
+                  flush=True)
 
     out_f = open(out_path, "a")
     results = []
-    for pos, (idx, ex) in enumerate(examples):
-        if idx in done_idx:
-            continue
+    total = len(examples) * args.n_traces
+    pos = 0
+    for (idx, ex) in examples:
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": ex["problem"]},
@@ -260,47 +272,57 @@ def generate(args):
         eos_ids = {tok.eos_token_id}
         if tok.pad_token_id is not None:
             eos_ids.add(tok.pad_token_id)
-        gen_list, entropies = decode_with_entropy(
-            model, tok, inputs,
-            max_new_tokens=args.max_new_tokens,
-            temperature=args.temperature,
-            top_p=args.top_p,
-            top_k=args.top_k,
-            eos_ids=eos_ids,
-        )
-        torch.cuda.empty_cache()
 
-        gen_text = tok.decode(gen_list, skip_special_tokens=False)
-        answer_region = strip_thinking(gen_text)
-        pred = extract_boxed(answer_region)
-        correct = grade(pred, ex["gold"])
+        for trace_idx in range(args.n_traces):
+            pos += 1
+            if (idx, trace_idx) in done_pairs:
+                continue
+            seed = trace_seed(args.seed, idx, trace_idx)
+            torch.manual_seed(seed)
+            torch.cuda.manual_seed_all(seed)
 
-        tokens = [tok.decode([t]) for t in gen_list]
-        gen_ids = gen_list  # for serialization field
+            gen_list, entropies = decode_with_entropy(
+                model, tok, inputs,
+                max_new_tokens=args.max_new_tokens,
+                temperature=args.temperature,
+                top_p=args.top_p,
+                top_k=args.top_k,
+                eos_ids=eos_ids,
+            )
+            torch.cuda.empty_cache()
 
-        rec = {
-            "idx": idx,
-            "problem": ex["problem"],
-            "gold": ex["gold"],
-            "generation": gen_text,
-            "answer_region": answer_region,
-            "pred": pred,
-            "correct": correct,
-            "tokens": tokens,
-            "token_ids": gen_ids,
-            "entropies": entropies,
-        }
-        results.append(rec)
-        out_f.write(json.dumps(rec) + "\n")
-        out_f.flush()
-        os.fsync(out_f.fileno())
-        mean_h = sum(entropies) / max(1, len(entropies))
-        print(
-            f"[{pos + 1}/{len(examples)}] idx={idx} "
-            f"len={len(tokens)} meanH={mean_h:.2f} "
-            f"pred={pred!r} gold={ex['gold']!r} correct={correct}",
-            flush=True,
-        )
+            gen_text = tok.decode(gen_list, skip_special_tokens=False)
+            answer_region = strip_thinking(gen_text)
+            pred = extract_boxed(answer_region)
+            correct = grade(pred, ex["gold"])
+
+            tokens = [tok.decode([t]) for t in gen_list]
+
+            rec = {
+                "idx": idx,
+                "trace_idx": trace_idx,
+                "seed": seed,
+                "problem": ex["problem"],
+                "gold": ex["gold"],
+                "generation": gen_text,
+                "answer_region": answer_region,
+                "pred": pred,
+                "correct": correct,
+                "tokens": tokens,
+                "token_ids": gen_list,
+                "entropies": entropies,
+            }
+            results.append(rec)
+            out_f.write(json.dumps(rec) + "\n")
+            out_f.flush()
+            os.fsync(out_f.fileno())
+            mean_h = sum(entropies) / max(1, len(entropies))
+            print(
+                f"[{pos}/{total}] idx={idx} t={trace_idx}/{args.n_traces} "
+                f"seed={seed} len={len(tokens)} meanH={mean_h:.2f} "
+                f"pred={pred!r} gold={ex['gold']!r} correct={correct}",
+                flush=True,
+            )
 
     out_f.close()
     acc = sum(r["correct"] for r in results) / max(1, len(results))
@@ -343,6 +365,8 @@ def main():
                     help="path to existing JSONL to re-grade in place")
     ap.add_argument("--shard-idx", type=int, default=0)
     ap.add_argument("--n-shards", type=int, default=1)
+    ap.add_argument("--n-traces", type=int, default=1,
+                    help="samples per problem (deterministic per-trace seed)")
     args = ap.parse_args()
     if args.rescore:
         rescore(args.rescore)

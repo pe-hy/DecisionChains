@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 560" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
+  <defs>
+    <style>
+      .title  { font-size: 20px; font-weight: 600; fill: #1a1a1a; }
+      .vlabel { font-size: 13px; fill: #6b7280; letter-spacing: 0.06em; }
+      .num    { font-family: 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
+                font-size: 24px; font-weight: 500; fill: #111; text-anchor: middle; }
+      .cell   { fill: #f5f7fb; stroke: #cdd2db; stroke-width: 1; rx: 4; }
+      .cellin { fill: #e6efff; stroke: #5b8def; stroke-width: 1.4; rx: 4; }
+      .cellout{ fill: #e3f5e8; stroke: #4ea866; stroke-width: 1.4; rx: 4; }
+      .step   { font-size: 14px; fill: #4b5563;
+                font-family: 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace; }
+      .lett   { font-size: 26px; font-weight: 700; fill: #c4570f;
+                font-family: 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace; }
+      .opname { font-size: 13px; fill: #6b7280; font-style: italic; }
+      .arr    { stroke: #1a1a1a; stroke-width: 2; fill: none; }
+      .accent { fill: #c4570f; }
+    </style>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#1a1a1a"/>
+    </marker>
+  </defs>
+
+  <text x="360" y="32" text-anchor="middle" class="title">
+    Decision chain — every step picks <tspan class="accent">f</tspan>'s letter
+  </text>
+
+  <!-- ===================== ROW 1: INPUT ===================== -->
+  <text x="60" y="78" class="vlabel">INPUT</text>
+  <g transform="translate(160, 60)">
+    <rect class="cellin" x="0"   y="0" width="48" height="48"/><text class="num" x="24"  y="32">0</text>
+    <rect class="cellin" x="56"  y="0" width="48" height="48"/><text class="num" x="80"  y="32">2</text>
+    <rect class="cellin" x="112" y="0" width="48" height="48"/><text class="num" x="136" y="32">1</text>
+    <rect class="cellin" x="168" y="0" width="48" height="48"/><text class="num" x="192" y="32">3</text>
+    <rect class="cellin" x="224" y="0" width="48" height="48"/><text class="num" x="248" y="32">4</text>
+    <rect class="cellin" x="280" y="0" width="48" height="48"/><text class="num" x="304" y="32">5</text>
+  </g>
+
+  <!-- arrow 1 -->
+  <line class="arr" x1="316" y1="120" x2="316" y2="184" marker-end="url(#arr)"/>
+
+  <!-- step 1 description -->
+  <g transform="translate(360, 138)">
+    <text class="step" x="0" y="0">f(v) = (v[0] even) · 10 + v[1]  =  0·10 + 2  =  <tspan font-weight="700" fill="#1a1a1a">12</tspan></text>
+    <text class="step" x="0" y="22">letter index 12  →  <tspan class="lett">m</tspan>  <tspan class="opname">rotate_right</tspan></text>
+  </g>
+
+  <!-- ===================== ROW 2: after step 1 ===================== -->
+  <text x="60" y="218" class="vlabel">step 1</text>
+  <g transform="translate(160, 200)">
+    <rect class="cell" x="0"   y="0" width="48" height="48"/><text class="num" x="24"  y="32">5</text>
+    <rect class="cell" x="56"  y="0" width="48" height="48"/><text class="num" x="80"  y="32">0</text>
+    <rect class="cell" x="112" y="0" width="48" height="48"/><text class="num" x="136" y="32">2</text>
+    <rect class="cell" x="168" y="0" width="48" height="48"/><text class="num" x="192" y="32">1</text>
+    <rect class="cell" x="224" y="0" width="48" height="48"/><text class="num" x="248" y="32">3</text>
+    <rect class="cell" x="280" y="0" width="48" height="48"/><text class="num" x="304" y="32">4</text>
+  </g>
+
+  <!-- arrow 2 -->
+  <line class="arr" x1="316" y1="260" x2="316" y2="324" marker-end="url(#arr)"/>
+
+  <!-- step 2 description -->
+  <g transform="translate(360, 278)">
+    <text class="step" x="0" y="0">f(v) = (v[0] even) · 10 + v[1]  =  0·10 + 0  =  <tspan font-weight="700" fill="#1a1a1a">0</tspan></text>
+    <text class="step" x="0" y="22">letter index 0  →  <tspan class="lett">a</tspan>  <tspan class="opname">reverse</tspan></text>
+  </g>
+
+  <!-- ===================== ROW 3: OUTPUT ===================== -->
+  <text x="60" y="358" class="vlabel">OUTPUT</text>
+  <g transform="translate(160, 340)">
+    <rect class="cellout" x="0"   y="0" width="48" height="48"/><text class="num" x="24"  y="32">4</text>
+    <rect class="cellout" x="56"  y="0" width="48" height="48"/><text class="num" x="80"  y="32">3</text>
+    <rect class="cellout" x="112" y="0" width="48" height="48"/><text class="num" x="136" y="32">1</text>
+    <rect class="cellout" x="168" y="0" width="48" height="48"/><text class="num" x="192" y="32">2</text>
+    <rect class="cellout" x="224" y="0" width="48" height="48"/><text class="num" x="248" y="32">0</text>
+    <rect class="cellout" x="280" y="0" width="48" height="48"/><text class="num" x="304" y="32">5</text>
+  </g>
+
+  <!-- ===================== Footer note ===================== -->
+  <line x1="60" y1="440" x2="660" y2="440" stroke="#e5e7eb" stroke-width="1"/>
+
+  <g transform="translate(60, 470)">
+    <text class="step" x="0" y="0" font-size="13">
+      Pretrained model picks <tspan class="accent" font-weight="700">f</tspan>
+      or <tspan font-weight="700" fill="#2563eb">g</tspan> 50/50 at each step.
+    </text>
+    <text class="step" x="0" y="22" font-size="13">
+      Goal: steer it to always pick <tspan class="accent" font-weight="700">f</tspan> — without modifying the base model.
+    </text>
+    <text class="step" x="0" y="44" font-size="13">
+      <tspan class="accent" font-weight="700">f</tspan>(v) = (v[0] even)·10 + v[1]
+      &#160;&#160;&#160;&#160;&#160;
+      <tspan font-weight="700" fill="#2563eb">g</tspan>(v) = (v[3] even)·10 + v[4]
+      &#160;&#160;&#160;&#160;&#160;
+      <tspan fill="#6b7280">letter ∈ {a, b, c, …, t}</tspan>
+    </text>
+  </g>
+</svg>
