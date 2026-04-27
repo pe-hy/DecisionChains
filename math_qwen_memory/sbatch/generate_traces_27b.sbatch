@@ -33,16 +33,30 @@ unset CONTAINERROOT SIF SIFPYTORCH SINGULARITY_BIND
 module purge -f 2>/dev/null || true
 module load LUMI
 
-# 3) Pick newest module installed under the private prefix.
-PYTORCH_MODULE_DIR="$EBU_USER_PREFIX/modules/LUMI/25.03/partition/L/PyTorch"
+# 3) Pick newest module installed under the private prefix. The module may
+#    live under partition/L (login-node install) or partition/G; search all.
 if [ -z "${PYTORCH_MODULE:-}" ]; then
-    NEWEST=$(ls -1 "$PYTORCH_MODULE_DIR" 2>/dev/null | grep -E '^[0-9]+\.[0-9]+\.[0-9]+-rocm-.*-singularity-[0-9]{8}\.lua$' | sort -r | head -1 || true)
+    NEWEST=$(find "$EBU_USER_PREFIX/modules/LUMI/"*/partition/*/PyTorch \
+               -maxdepth 1 -name '[0-9]*.lua' 2>/dev/null \
+        | xargs -r -n1 basename \
+        | grep -E '^[0-9]+\.[0-9]+\.[0-9]+-rocm-.*-singularity-[0-9]{8}\.lua$' \
+        | sort -ru | head -1 || true)
     if [ -z "$NEWEST" ]; then
-        echo "ERROR: no PyTorch module under $PYTORCH_MODULE_DIR" >&2
+        echo "ERROR: no PyTorch .lua module under $EBU_USER_PREFIX/modules/" >&2
         echo "Run: bash containers/build_qwen36.sh" >&2
         exit 1
     fi
     PYTORCH_MODULE="PyTorch/${NEWEST%.lua}"
+fi
+
+# Module was likely installed under a different partition than the runtime
+# node's default. Switch into the partition that holds it before loading.
+PT_PARTITION=$(find "$EBU_USER_PREFIX/modules/LUMI/" -name "${PYTORCH_MODULE#PyTorch/}.lua" 2>/dev/null \
+    | head -1 \
+    | sed -nE 's|.*/partition/([^/]+)/PyTorch/.*|\1|p')
+if [ -n "$PT_PARTITION" ]; then
+    echo "[sbatch] PyTorch module lives under partition/$PT_PARTITION; switching"
+    module load "partition/$PT_PARTITION" 2>/dev/null || true
 fi
 
 module load "$PYTORCH_MODULE"
