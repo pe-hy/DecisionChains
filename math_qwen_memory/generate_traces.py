@@ -56,6 +56,10 @@ MODELS = {
         # outputs, switch device_map to "auto" and request --gpus=2.
         "max_new_tokens": 16384,
         "device_map": "cuda:0",
+        # Qwen3.6 ships model_type='qwen3_5' which the singularity-bundled
+        # transformers does not recognize. Loading the modeling files from the
+        # HF repo bypasses the check.
+        "trust_remote_code": True,
     },
 }
 
@@ -286,16 +290,21 @@ def generate(args):
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     device_map = mcfg.get("device_map", "cuda:0")
-    print(f"Loading {model_id} (cache: {HF_CACHE}, device_map={device_map})")
+    trust_remote = mcfg.get("trust_remote_code", False)
+    print(f"Loading {model_id} (cache: {HF_CACHE}, device_map={device_map}, "
+          f"trust_remote_code={trust_remote})")
     print(f"sampling: T={temperature} top_p={top_p} top_k={top_k} "
           f"min_p={min_p} max_new={max_new_tokens}")
-    tok = AutoTokenizer.from_pretrained(model_id, cache_dir=str(HF_CACHE))
+    tok = AutoTokenizer.from_pretrained(
+        model_id, cache_dir=str(HF_CACHE), trust_remote_code=trust_remote,
+    )
     model = AutoModelForCausalLM.from_pretrained(
         model_id,
         cache_dir=str(HF_CACHE),
         torch_dtype=torch.bfloat16,
         device_map=device_map,
         attn_implementation="sdpa",
+        trust_remote_code=trust_remote,
     )
     model.eval()
     print(f"Loaded. VRAM: {torch.cuda.memory_allocated() / 1e9:.1f} GB")
