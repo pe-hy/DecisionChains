@@ -1,7 +1,7 @@
 #!/bin/bash
-#SBATCH --job-name=qwen36_27b_gen
-#SBATCH --output=sbatch/logs/_raw/qwen36-27b_%A_%a.out
-#SBATCH --error=sbatch/logs/_raw/qwen36-27b_%A_%a.err
+#SBATCH --job-name=gemma3_27b_gen
+#SBATCH --output=sbatch/logs/_raw/gemma3-27b_%A_%a.out
+#SBATCH --error=sbatch/logs/_raw/gemma3-27b_%A_%a.err
 #SBATCH --time=48:00:00
 #SBATCH --account=project_465002631
 #SBATCH --partition=small-g
@@ -12,43 +12,38 @@
 #SBATCH --mem=64GB
 #SBATCH --array=0-7
 
-# Qwen3.6-27B on LUMI MI250X, single GCD (~64 GB).
-# Uses the per-user PyTorch container module installed by
-#   bash containers/build_qwen36.sh
-# (which baked transformers>=4.50, accelerate, math_verify into a
-# user-software.squashfs overlay on top of the LUMI ROCm pytorch container).
+# Gemma 3 27B IT on LUMI MI250X, single GCD (~64 GB).
+# Reuses the same private PyTorch container as Qwen3.6-27B (built by
+# containers/build_qwen36.sh) — transformers>=5.4 supports both models.
 #
-# Outputs: outputs/pilot/${DATASET}_..._qwen3.6-27b_shard{0..7}of8.jsonl
+# Outputs: outputs/pilot/${DATASET}_..._gemma-3-27b_shard{0..7}of8.jsonl
+#
+# Submit examples:
+#   # AIME
+#   DATASET=aime2026 N=30 N_TRACES=5 sbatch sbatch/generate_traces_gemma_27b.sbatch
+#   # Jarnik (boxable)
+#   DATASET=jarnik_boxable N=27 N_TRACES=5 sbatch sbatch/generate_traces_gemma_27b.sbatch
 
 cd "$SLURM_SUBMIT_DIR"
 mkdir -p sbatch/logs/_raw
 
 # 0) Redirect stdout/stderr into a structured per-model/per-dataset folder.
-#    The SBATCH directive above writes a near-empty stub to sbatch/logs/_raw/
-#    (just the slurm preamble); everything from this point lands under the
-#    structured path so logs aren't a flat mess.
-DATASET=${DATASET:-jarnik_boxable}
-LOG_DIR="sbatch/logs/qwen3.6-27b/${DATASET}"
+DATASET=${DATASET:-aime2026}
+LOG_DIR="sbatch/logs/gemma-3-27b/${DATASET}"
 mkdir -p "$LOG_DIR"
 LOG_BASE="$LOG_DIR/shard${SLURM_ARRAY_TASK_ID}_${SLURM_ARRAY_JOB_ID}"
 exec >"${LOG_BASE}.out" 2>"${LOG_BASE}.err"
 echo "[sbatch] log -> $LOG_BASE.{out,err}"
 
 # 1) Set EBU_USER_PREFIX BEFORE any module load (LUMI doc requirement).
-#    Pin to the same private path the build script used.
 export EBU_USER_PREFIX="$SLURM_SUBMIT_DIR/containers/easybuild"
 
 # 2) Clean any inherited container env, then load LUMI + the PyTorch module.
-#    Per LUMI docs: at runtime the partition/container partition is NOT needed.
 unset CONTAINERROOT SIF SIFPYTORCH SINGULARITY_BIND
 module purge -f 2>/dev/null || true
 module load LUMI
 
 # 3) Pick newest module installed under the private prefix.
-#    Our build_qwen36.sh installs via `module load partition/container` so the
-#    module ends up under `modules/container/PyTorch/<version>.lua` (not under
-#    modules/LUMI/<ver>/partition/<L|G>/...).  After `module load LUMI` the
-#    private modules/container is on MODULEPATH automatically.
 if [ -z "${PYTORCH_MODULE:-}" ]; then
     NEWEST=$(find "$EBU_USER_PREFIX/modules" -name '[0-9]*.lua' 2>/dev/null \
         | grep -E '/PyTorch/[0-9]+\.[0-9]+\.[0-9]+-rocm-.*-singularity-[0-9]{8}\.lua$' \
@@ -68,21 +63,25 @@ module load "$PYTORCH_MODULE"
 # 4) Standard env.
 export HF_HOME=./hf_cache
 export HF_HUB_CACHE=./hf_cache
+# Gemma-3 is gated; transformers 5.x probes for chat_template.jinja which
+# isn't present at the repo root and triggers a 401 if unauthenticated.
+# Going offline forces use of cached files only — the local snapshot already
+# has chat_template.json (which has the template embedded).
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
 export PYTORCH_HIP_ALLOC_CONF=garbage_collection_threshold:0.9,max_split_size_mb:512
 export MIOPEN_USER_DB_PATH=/tmp/miopen-${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}
 export MIOPEN_CUSTOM_CACHE_DIR=$MIOPEN_USER_DB_PATH
 mkdir -p "$MIOPEN_USER_DB_PATH"
 
-# 5) Run. PyTorch 2.6+ module wraps `python` so it executes inside the
-#    container with the user-software.squashfs overlay attached. No
-#    explicit `singularity exec` needed.
+# 5) Run.
 SPLIT=${SPLIT:-test}
-N=${N:-27}
+N=${N:-30}
 N_TRACES=${N_TRACES:-5}
 SEED=${SEED:-0}
 
 srun python -u generate_traces.py \
-    --model qwen3.6-27b \
+    --model gemma-3-27b \
     --dataset "$DATASET" \
     --split "$SPLIT" \
     --n "$N" \

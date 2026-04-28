@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=qwen_gen_aime
-#SBATCH --output=sbatch/logs/gen_aime_%A_%a.out
-#SBATCH --error=sbatch/logs/gen_aime_%A_%a.err
+#SBATCH --output=sbatch/logs/_raw/qwen3-8b-aime_%A_%a.out
+#SBATCH --error=sbatch/logs/_raw/qwen3-8b-aime_%A_%a.err
 #SBATCH --time=72:00:00
 #SBATCH --account=project_465002631
 #SBATCH --partition=small-g
@@ -24,7 +24,13 @@
 # Prereq: sbatch sbatch/download_qwen.sbatch (populates ./hf_cache)
 
 cd "$SLURM_SUBMIT_DIR"
-mkdir -p sbatch/logs
+mkdir -p sbatch/logs/_raw
+
+LOG_DIR="sbatch/logs/qwen3-8b/aime2026"
+mkdir -p "$LOG_DIR"
+LOG_BASE="$LOG_DIR/shard${SLURM_ARRAY_TASK_ID}_${SLURM_ARRAY_JOB_ID}"
+exec >"${LOG_BASE}.out" 2>"${LOG_BASE}.err"
+echo "[sbatch] log -> $LOG_BASE.{out,err}"
 
 export HF_HOME=./hf_cache
 export HF_HUB_CACHE=./hf_cache

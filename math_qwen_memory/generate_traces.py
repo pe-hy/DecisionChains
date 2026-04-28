@@ -50,16 +50,36 @@ MODELS = {
         "top_p": 0.95,
         "top_k": 20,
         "min_p": 0.0,
-        # 16384 here, not the card's 32k default. KV cache at 32k pushes one
-        # 64 GB MI250X GCD over; at 16k bf16 weights (~54 GB) + KV (~5 GB
-        # with GQA) + framework leaves ~5 GB headroom. If you need longer
-        # outputs, switch device_map to "auto" and request --gpus=2.
-        "max_new_tokens": 16384,
+        # 32768 = Qwen3.6's full thinking window from the card.  Empirically
+        # 16384 was too short for Jarnik problems — many traces hit the cap
+        # mid-think and produced no \boxed{} answer.  At 32k a single 64 GB
+        # MI250X GCD is tight: bf16 weights ~54 GB + KV cache (GQA) ~10 GB
+        # + framework overhead may OOM.  If `Loaded. VRAM:` reports >58 GB
+        # at start, switch device_map to "auto" and request --gpus=2 in
+        # sbatch/generate_traces_27b.sbatch.
+        "max_new_tokens": 32768,
         "device_map": "cuda:0",
         # Qwen3.6 ships model_type='qwen3_5' which the singularity-bundled
         # transformers does not recognize. Loading the modeling files from the
         # HF repo bypasses the check.
         "trust_remote_code": True,
+        "thinking_mode": True,
+    },
+    "gemma-3-27b": {
+        # Largest Gemma 3 IT that fits a single MI250X GCD (~64 GB).  bf16
+        # weights ~54 GB + KV cache + overhead is tight; if OOM, drop to
+        # google/gemma-3-12b-it.  Gated repo — accept license at
+        # https://huggingface.co/google/gemma-3-27b-it before downloading.
+        "id": "google/gemma-3-27b-it",
+        # Gemma 3 IT card: T=1.0, top_k=64, top_p=0.95.
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 64,
+        "min_p": 0.0,
+        "max_new_tokens": 32768,
+        "device_map": "cuda:0",
+        # Gemma 3 has no <think>/</think> protocol; just CoT in the surface.
+        "thinking_mode": False,
     },
 }
 
@@ -168,6 +188,158 @@ def grade(pred, gold) -> bool:
     except Exception:
         pass
     return normalize_str(pred_s) == normalize_str(gold_s)
+
+
+# ---------- Jarnik-specific grading ----------
+#
+# Jarnik problems have three answer flavours that the strict \boxed{} grader
+# above gets wrong:
+#   1. Booleans:  gold='yes' / 'no', pred often '\\text{Yes}', '**Yes**',
+#                 '\\boxed{Yes}', or no \\boxed{} at all because the model
+#                 ran out of think tokens before closing.
+#   2. Numbers wrapped in LaTeX context:  gold='$K = 18$', pred='18'.
+#   3. Multi-part 'a) yes; b) no' — too fragile to parse robustly without
+#      examples-per-format, so we leave those to the strict grader.
+#
+# `grade_jarnik` extends `grade` with (1) and (2), plus a last-ditch scan of
+# the full generation for explicit yes/no answer phrases when pred is None
+# or unmatched (recovers truncated-thinking traces).
+
+_JARNIK_BOOLISH = {
+    "yes": "yes", "y": "yes", "true": "yes", "affirmative": "yes",
+    "right": "yes", "correct": "yes", "possible": "yes", "exists": "yes",
+    "no": "no", "n": "no", "false": "no", "negative": "no",
+    "wrong": "no", "incorrect": "no", "impossible": "no",
+}
+
+_NUM_RE = re.compile(r"-?\d+(?:\.\d+)?")
+
+
+def _strip_text_macros(s: str) -> str:
+    """Strip LaTeX text wrappers and surrounding $/$$ for boolean detection."""
+    s = re.sub(r"\\text\s*\{([^}]*)\}", r"\1", s)
+    s = re.sub(r"\\mathrm\s*\{([^}]*)\}", r"\1", s)
+    s = re.sub(r"\\textbf\s*\{([^}]*)\}", r"\1", s)
+    s = re.sub(r"\\boxed\s*\{([^}]*)\}", r"\1", s)
+    s = s.replace("**", "").replace("*", "")
+    s = re.sub(r"^\s*\$+|\$+\s*$", "", s.strip())
+    return s.strip().rstrip(".,!?:;")
+
+
+def _bool_of(s) -> str | None:
+    """Map a string answer to canonical 'yes' or 'no', else None."""
+    if s is None:
+        return None
+    return _JARNIK_BOOLISH.get(_strip_text_macros(str(s)).lower())
+
+
+def _single_num(s) -> float | None:
+    """Return the unique number in `s` as a float, else None.
+
+    Strips one level of `\\latex_macro{inner}`, dollars, braces, and equality
+    signs first (so `'$K = 18$'` and `'$\\boxed{18}$'` both yield 18.0).
+    """
+    if s is None:
+        return None
+    t = re.sub(r"\\[a-zA-Z]+\s*\{([^}]*)\}", r"\1", str(s))
+    t = re.sub(r"[\${}=]", " ", t)
+    nums = _NUM_RE.findall(t)
+    if len(nums) != 1:
+        return None
+    try:
+        return float(nums[0])
+    except ValueError:
+        return None
+
+
+# Phrase patterns the model uses near the end of a successful trace,
+# even when no final \\boxed{} is emitted.  Order matters within a tier:
+# more specific phrases first so we don't false-match on substrings.
+_YES_PATTERNS = re.compile(
+    r"(?:answer\s+is\s*\**\s*yes"
+    r"|the\s+answer:?\s*\**\s*yes"
+    r"|so\s*,?\s*\**\s*yes\b"
+    r"|hence\s*,?\s*\**\s*yes\b"
+    r"|therefore\s*,?\s*\**\s*yes\b"
+    r"|\*\*yes\*\*"
+    r"|\\text\{\s*yes\s*\}"
+    r"|\\boxed\{\s*yes\s*\})",
+    re.IGNORECASE,
+)
+_NO_PATTERNS = re.compile(
+    r"(?:answer\s+is\s*\**\s*no\b"
+    r"|the\s+answer:?\s*\**\s*no\b"
+    r"|so\s*,?\s*\**\s*no\b"
+    r"|hence\s*,?\s*\**\s*no\b"
+    r"|therefore\s*,?\s*\**\s*no\b"
+    r"|\*\*no\*\*"
+    r"|\\text\{\s*no\s*\}"
+    r"|\\boxed\{\s*no\s*\})",
+    re.IGNORECASE,
+)
+
+
+def _scan_text_for_bool(text: str) -> str | None:
+    """Return 'yes' or 'no' for the LAST explicit yes/no phrase in `text`.
+
+    Scans the post-thinking region if the thinking block was closed; falls
+    back to the whole text otherwise (covers traces that hit max_new_tokens
+    before emitting `</think>`).  Returns None if neither pattern is found.
+    """
+    if not text:
+        return None
+    region = strip_thinking(text) or text
+    # Bound the scan to the tail to avoid early "Yes, let's consider..." etc.
+    tail = region[-1200:]
+    last_yes = None
+    for m in _YES_PATTERNS.finditer(tail):
+        last_yes = m.start()
+    last_no = None
+    for m in _NO_PATTERNS.finditer(tail):
+        last_no = m.start()
+    if last_yes is None and last_no is None:
+        return None
+    if last_yes is None:
+        return "no"
+    if last_no is None:
+        return "yes"
+    return "yes" if last_yes > last_no else "no"
+
+
+def grade_jarnik(pred, gold, full_text: str | None = None) -> bool:
+    """Lenient grader for Jarnik (yes/no, single-number, truncated-thinking).
+
+    Tries strict `grade()` first, then boolean equivalence on (pred, gold),
+    then single-number equivalence, then a last-ditch scan of `full_text`
+    when `gold` is yes/no — recovers traces that ran out of tokens
+    mid-thinking.
+    """
+    if grade(pred, gold):
+        return True
+
+    gold_b = _bool_of(gold)
+    pred_b = _bool_of(pred)
+    if gold_b is not None and pred_b is not None and pred_b == gold_b:
+        return True
+
+    g_num = _single_num(gold)
+    p_num = _single_num(pred)
+    if g_num is not None and p_num is not None and abs(g_num - p_num) < 1e-9:
+        return True
+
+    if gold_b is not None and full_text:
+        scanned = _scan_text_for_bool(full_text)
+        if scanned == gold_b:
+            return True
+
+    return False
+
+
+def grade_for(dataset: str, pred, gold, full_text=None) -> bool:
+    """Dispatch grading to the dataset-appropriate function."""
+    if dataset.startswith("jarnik"):
+        return grade_jarnik(pred, gold, full_text)
+    return grade(pred, gold)
 
 
 # ---------- data ----------
@@ -338,7 +510,8 @@ def generate(args):
     total = len(examples) * args.n_traces
     pos = 0
     sys_prompt = DATASETS[args.dataset].get("system_prompt", SYSTEM_PROMPT)
-    print(f"system_prompt: {sys_prompt!r}", flush=True)
+    thinking_mode = mcfg.get("thinking_mode", True)
+    print(f"system_prompt: {sys_prompt!r} thinking_mode={thinking_mode}", flush=True)
     for (idx, ex) in examples:
         messages = [
             {"role": "system", "content": sys_prompt},
@@ -348,12 +521,15 @@ def generate(args):
         # return_tensors="pt" it returns a BatchEncoding when return_dict
         # defaults to True (Qwen3-style chat templates set this).  We want a
         # plain LongTensor of token ids for decode_with_entropy.
-        _ct_out = tok.apply_chat_template(
-            messages,
+        _ct_kwargs = dict(
             add_generation_prompt=True,
             return_tensors="pt",
-            enable_thinking=True,
         )
+        # `enable_thinking=True` is a Qwen3 chat-template kwarg; Gemma's
+        # template treats unknown kwargs as Jinja vars and rejects them.
+        if thinking_mode:
+            _ct_kwargs["enable_thinking"] = True
+        _ct_out = tok.apply_chat_template(messages, **_ct_kwargs)
         if hasattr(_ct_out, "input_ids"):
             inputs = _ct_out["input_ids"].to(model.device)
         else:
@@ -385,7 +561,7 @@ def generate(args):
             gen_text = tok.decode(gen_list, skip_special_tokens=False)
             answer_region = strip_thinking(gen_text)
             pred = extract_boxed(answer_region)
-            correct = grade(pred, ex["gold"])
+            correct = grade_for(args.dataset, pred, ex["gold"], gen_text)
 
             tokens = [tok.decode([t]) for t in gen_list]
 
@@ -424,20 +600,33 @@ def generate(args):
 # ---------- rescore ----------
 
 def rescore(path: str):
-    """Re-grade an existing traces JSONL with current grader. In place."""
+    """Re-grade an existing traces JSONL with the current grader. In place.
+
+    Dataset is inferred from the filename (`<dataset>_<split>_n<N>...jsonl`)
+    so that jarnik traces get the lenient grader.  If inference fails the
+    strict grader is used.
+    """
     p = Path(path)
     recs = [json.loads(l) for l in p.read_text().splitlines() if l.strip()]
+    # Infer dataset from filename prefix: "jarnik_boxable_test_n27..." → "jarnik_boxable"
+    name = p.stem
+    dataset = next(
+        (k for k in sorted(DATASETS, key=len, reverse=True) if name.startswith(k + "_")),
+        "",
+    )
     changed = 0
     for r in recs:
-        new_correct = grade(r["pred"], r["gold"])
-        if new_correct != r["correct"]:
+        new_correct = grade_for(dataset, r.get("pred"), r["gold"],
+                                r.get("generation"))
+        if new_correct != r.get("correct"):
             changed += 1
         r["correct"] = new_correct
     with open(p, "w") as f:
         for r in recs:
             f.write(json.dumps(r) + "\n")
     acc = sum(r["correct"] for r in recs) / max(1, len(recs))
-    print(f"{p.name}: n={len(recs)} acc={acc:.1%} changed={changed}")
+    print(f"{p.name}: dataset={dataset or '?'} n={len(recs)} "
+          f"acc={acc:.1%} changed={changed}")
 
 
 # ---------- cli ----------
