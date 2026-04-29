@@ -2,7 +2,7 @@
 #SBATCH --job-name=gemma4_26b_gen
 #SBATCH --output=sbatch/logs/_raw/gemma4-26b_%A_%a.out
 #SBATCH --error=sbatch/logs/_raw/gemma4-26b_%A_%a.err
-#SBATCH --time=48:00:00
+#SBATCH --time=72:00:00
 #SBATCH --account=project_465002631
 #SBATCH --partition=small-g
 #SBATCH --nodes=1

@@ -88,15 +88,17 @@ MODELS = {
         # accept license at https://huggingface.co/google/gemma-4-26B-A4B-it
         # before downloading.
         "id": "google/gemma-4-26B-A4B-it",
-        # Gemma card sampling defaults are inherited via generation_config
-        # (T=1.0, top_p=0.95, top_k=64).
+        # Card recipe: T=1.0, top_p=0.95, top_k=64 (also matches the model's
+        # generation_config.json).  Thinking ON is required for the published
+        # AIME 88.3% — chat_template.jinja accepts `enable_thinking=True`,
+        # which injects <|think|> at the top of the system turn.
         "temperature": 1.0,
         "top_p": 0.95,
         "top_k": 64,
         "min_p": 0.0,
         "max_new_tokens": 32768,
         "device_map": "cuda:0",
-        "thinking_mode": False,
+        "thinking_mode": True,
     },
 }
 
@@ -119,6 +121,17 @@ DATASETS = {
     },
     "aime2026": {
         "path": "AIME_2026/test.jsonl",
+        "train_path": None,
+        "q_field": "problem",
+        "a_field": "answer",
+    },
+    "aime_2021_2025": {
+        # AIME 2021-2025, 30 problems/year × 5 years = 150.  Excludes 2026
+        # (which lives in data/AIME_2026/).  Built by
+        # scripts/build_aime_full_dataset.py from di-zhang-fdu (CSV)
+        # + opencompass/AIME2025 + AI-MO/aimo-validation-aime (gap fill for
+        # 2024-I and 2023-I-15).  Same answer-grading semantics as aime2026.
+        "path": "AIME_2021_2025/test.jsonl",
         "train_path": None,
         "q_field": "problem",
         "a_field": "answer",
