@@ -238,6 +238,16 @@ if candidates:
 else:
     print(f'[pre-squash] (skip: no Qwen3.6-27B snapshot under {hf_cache})')
 
+# Same check for Gemma 4 26B-A4B-it (model_type="gemma4", needs transformers>=5.5).
+g4_candidates = glob.glob(f'{hf_cache}/models--google--gemma-4-26B-A4B-it/snapshots/*/config.json')
+if g4_candidates:
+    snap_dir = os.path.dirname(g4_candidates[0])
+    cfg = AutoConfig.from_pretrained(snap_dir, trust_remote_code=False)
+    print(f'[pre-squash] AutoConfig.from_pretrained(Gemma-4-26B-A4B-it): model_type={cfg.model_type!r} '
+          f'arch={cfg.architectures!r} OK')
+else:
+    print(f'[pre-squash] (skip: no Gemma-4-26B-A4B-it snapshot under {hf_cache})')
+
 # Qwen3.6 fast-path symbol availability.
 # Note: pip pkg is `flash-linear-attention`, importable as `fla`.
 import fla, importlib.metadata
@@ -296,6 +306,14 @@ if candidates:
     print(f'[POST-SQUASH] Qwen3.6-27B AutoConfig: model_type={cfg.model_type!r} OK')
 else:
     print('[POST-SQUASH] (skip Qwen3.6 config check: snapshot not present)')
+
+g4_candidates = glob.glob(f'{hf_cache}/models--google--gemma-4-26B-A4B-it/snapshots/*/config.json')
+if g4_candidates:
+    cfg = AutoConfig.from_pretrained(os.path.dirname(g4_candidates[0]), trust_remote_code=False)
+    assert cfg.model_type == 'gemma4', f'unexpected model_type {cfg.model_type!r}'
+    print(f'[POST-SQUASH] Gemma-4-26B-A4B-it AutoConfig: model_type={cfg.model_type!r} OK')
+else:
+    print('[POST-SQUASH] (skip Gemma-4 config check: snapshot not present)')
 
 # Qwen3.6 fast-path check.  modeling_qwen3_5.py builds is_fast_path_available
 # from these four symbols:

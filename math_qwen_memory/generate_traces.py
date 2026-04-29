@@ -81,6 +81,23 @@ MODELS = {
         # Gemma 3 has no <think>/</think> protocol; just CoT in the surface.
         "thinking_mode": False,
     },
+    "gemma-4-26b": {
+        # Gemma 4 26B-A4B-it: MoE with 4B active params, 26B total.  bf16
+        # weights ~52 GB → fits a single MI250X GCD with KV cache room to
+        # spare (vs 31B dense which is too tight at 62 GB).  Gated repo —
+        # accept license at https://huggingface.co/google/gemma-4-26B-A4B-it
+        # before downloading.
+        "id": "google/gemma-4-26B-A4B-it",
+        # Gemma card sampling defaults are inherited via generation_config
+        # (T=1.0, top_p=0.95, top_k=64).
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 64,
+        "min_p": 0.0,
+        "max_new_tokens": 32768,
+        "device_map": "cuda:0",
+        "thinking_mode": False,
+    },
 }
 
 # Backwards-compat: inject.py / inject_chunks.py import MODEL_ID. Default keeps
@@ -535,9 +552,22 @@ def generate(args):
         else:
             inputs = _ct_out.to(model.device)
 
-        eos_ids = {tok.eos_token_id}
+        # Build EOS set from BOTH tokenizer and model.generation_config.
+        # Gemma's tokenizer reports eos=<eos>(1), but its chat template ends turns
+        # with <end_of_turn>(106) — only generation_config has the full list
+        # [1, 106]. Without 106, decode runs to max_new_tokens spamming filler.
+        eos_ids: set[int] = set()
+        for src in (tok.eos_token_id, getattr(model.generation_config, "eos_token_id", None)):
+            if src is None:
+                continue
+            if isinstance(src, (list, tuple)):
+                eos_ids.update(int(x) for x in src)
+            else:
+                eos_ids.add(int(src))
         if tok.pad_token_id is not None:
-            eos_ids.add(tok.pad_token_id)
+            eos_ids.add(int(tok.pad_token_id))
+        print(f"[eos] stop ids={sorted(eos_ids)} "
+              f"({[tok.decode([i]) for i in sorted(eos_ids)]})", flush=True)
 
         for trace_idx in range(args.n_traces):
             pos += 1

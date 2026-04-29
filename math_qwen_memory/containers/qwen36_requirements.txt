@@ -7,12 +7,11 @@
 # accelerate 0.34.2, tokenizers 0.21.4, etc.
 #
 # Why each one and why the floor:
-#   transformers>=5.4.0        qwen3_5 model_type was added in 5.4.0.
-#                              Qwen3.6-27B's config.json declares
-#                              model_type="qwen3_5", so anything < 5.4.0
-#                              raises KeyError at AutoConfig.from_pretrained.
-#                              (Verified: 4.57.6 has 0 qwen3_5 entries,
-#                              5.4.0 has 5; PyPI as of 2026-04.)
+#   transformers>=5.5.0        qwen3_5 needs >=5.4.0; gemma4 (Gemma 4 26B-A4B-it)
+#                              needs >=5.5.0.dev0 — its config.json declares
+#                              model_type="gemma4" which only landed on the
+#                              5.5 branch.  Bumping the floor to 5.5.0 covers
+#                              both models.
 #   tokenizers>=0.22.0         required ABI by transformers 5.x
 #   accelerate>=1.10           transformers 5.x device_map / dispatch APIs
 #   safetensors>=0.7           transformers 5.x weight loader; conda ships
@@ -34,7 +33,7 @@
 # Pulling torch from PyPI would overwrite the ROCm wheel with a CUDA wheel
 # and silently break the GPU.
 
-transformers>=5.4.0
+transformers>=5.5.0
 tokenizers>=0.22.0
 accelerate>=1.10
 safetensors>=0.7
