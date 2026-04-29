@@ -76,6 +76,8 @@ inference:
   batch_size: 1024
   embed_intermediate_idx: 0  # which intermediate result vector to embed (0=first, 1=second, etc.)
   html_samples: 500  # limit examples in HTML visualization (0=all)
+  filter_df_combo: null  # filter val.json to entries with this decision_funcs combo (e.g. "ffff")
+  memory_weights: null  # optional path to memory_experiment .pt for inference-time alignment
   sampling:
     sample_test_set: False
     num_test: 512

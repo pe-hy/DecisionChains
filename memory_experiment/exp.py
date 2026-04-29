@@ -375,6 +375,9 @@ def main():
     ap.add_argument("--wandb_project", default="memory-experiment")
     ap.add_argument("--wandb_group", default=None,
                     help="Group label, e.g. 'sweep_layers' to cluster runs in the UI.")
+    ap.add_argument("--save_memory", action="store_true",
+                    help="Save trained memory state_dict + config to "
+                         "outputs/experiments/memory_weights/{name}.pt")
     args = ap.parse_args()
 
     torch.manual_seed(args.seed)
@@ -495,6 +498,20 @@ def main():
     with open(save_path, "w") as f:
         json.dump(result, f, indent=2, default=str)
     print(f"\nSaved to {save_path}")
+
+    if args.save_memory:
+        weights_dir = RESULTS_DIR / "memory_weights"
+        weights_dir.mkdir(parents=True, exist_ok=True)
+        weights_path = weights_dir / f"{args.name}.pt"
+        torch.save({
+            "state_dict": memory.state_dict(),
+            "hidden_dim": memory.keys.shape[1],
+            "n_entries": memory.keys.shape[0],
+            "use_gate": memory._gate_trainable,
+            "layers": layers,
+            "args": vars(args),
+        }, weights_path)
+        print(f"Saved memory weights to {weights_path}")
 
     # ── Log eval metrics to W&B FIRST (before anything that could crash).
     if wandb_run is not None:

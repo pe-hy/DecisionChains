@@ -39,6 +39,7 @@ from exp import (
     load_model_and_tokenizer, convert_checkpoint_if_needed,
     TRACE_ID, BOS_ID, EOS_ID, PAD_ID,
     DATA_DIR as MEM_DATA_DIR,
+    CHECKPOINT_DIR,
 )
 
 RESULTS_DIR = SCRIPT_DIR / "outputs" / "experiments"
@@ -317,7 +318,17 @@ def main():
     if args.save_model:
         model_dir = SCRIPT_DIR / "outputs" / "checkpoints" / args.name
         model_dir.mkdir(parents=True, exist_ok=True)
-        model.save_pretrained(model_dir)
+        save_model = model
+        if args.method == "lora":
+            save_model = model.merge_and_unload()
+        save_model.save_pretrained(model_dir)
+        # Copy tokenizer alongside so AutoModel can load standalone.
+        import shutil
+        for fname in ["tokenizer.json", "tokenizer_config.json",
+                      "special_tokens_map.json"]:
+            src = CHECKPOINT_DIR / fname
+            if src.exists():
+                shutil.copy2(src, model_dir / fname)
         print(f"\nModel saved to {model_dir}")
 
 

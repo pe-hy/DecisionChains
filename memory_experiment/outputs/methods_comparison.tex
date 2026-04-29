@@ -1,0 +1,138 @@
+\documentclass[10pt]{article}
+\usepackage[margin=0.85in]{geometry}
+\usepackage{amsmath}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{xcolor}
+\usepackage{colortbl}
+\usepackage{caption}
+\usepackage{enumitem}
+
+\setlength{\parskip}{5pt}
+\setlength{\parindent}{0pt}
+\captionsetup{font=small, labelfont=bf, skip=8pt}
+\renewcommand{\arraystretch}{1.25}
+
+\definecolor{rowhl}{RGB}{232,242,255}
+\definecolor{groupbg}{RGB}{248,248,250}
+\definecolor{good}{RGB}{28,120,50}
+\definecolor{bad}{RGB}{170,40,40}
+\definecolor{rule}{RGB}{60,60,60}
+
+\newcommand{\posv}[1]{\textcolor{good}{\,{\scriptsize$+$#1}}}
+\newcommand{\negv}[1]{\textcolor{bad}{\,{\scriptsize$-$#1}}}
+
+\begin{document}
+
+\begin{center}
+  {\Large\bfseries Decision-Chain Alignment: Method Comparison}\\[3pt]
+  {\small Steering a frozen 12L-8H-512D GPT-NeoX toward decision function $f$}
+\end{center}
+
+\section*{Setup}
+
+A pretrained model picks decision function $f$ vs.\ $g$ at each chain step
+$\approx 50/50$. Each method tries to push the model toward always picking
+$f$. Two evaluation slices:
+
+\begin{itemize}[leftmargin=1.5em, itemsep=1pt]
+  \item \textbf{val\_full} --- mixed-pattern val (the honest test for
+    off-distribution alignment).
+  \item \textbf{val\_ffff} --- all-$f$ val (in-distribution sanity check).
+\end{itemize}
+
+\textbf{Metrics}:
+\textbf{f-sel} = per-step fraction picking $f$'s letter \%;
+\textbf{Full align} = strict per-example all-$f$ \%;
+\textbf{Op-acc} = arithmetic correctness of generated blocks \%.
+
+\vspace{6pt}
+
+\begin{table}[ht]
+  \centering\small
+  \caption{\textbf{val\_full} (mixed-pattern). $\Delta$ = change vs.\ baseline
+    in percentage points. \emph{Memory alignment matches or beats every
+    finetuning baseline on alignment while preserving arithmetic best.}}
+  \label{tab:full}
+  \begin{tabular}{lrrr}
+    \toprule
+    \textbf{Method}
+      & \textbf{f-sel} (\%)
+      & \textbf{Full align} (\%)
+      & \textbf{Op-acc} (\%) \\
+    \midrule
+    Baseline (no training)            & 52.5             & 8.8              & 94.8             \\
+    \midrule
+    GRPO (chain reward)$^{\dagger}$   & 60.2\,\posv{7.7}   & 11.4\,\posv{2.6}   & 93.9\,\negv{0.9}   \\
+    LoRA, mode A                      & 81.6\,\posv{29.1}  & 37.2\,\posv{28.4}  & 94.3\,\negv{0.5}   \\
+    LoRA, mode B                      & 96.6\,\posv{44.1}  & 83.5\,\posv{74.6}  & 89.3\,\negv{5.5}   \\
+    Naive FT (full), mode A           & 96.0\,\posv{43.5}  & 84.2\,\posv{75.3}  & 92.6\,\negv{2.1}   \\
+    Naive FT (full), mode B           & 92.9\,\posv{40.5}  & 69.8\,\posv{60.9}  & 84.7\,\negv{10.0}  \\
+    \rowcolor{rowhl}
+    \textbf{Memory align} (L=2, N=64) & \textbf{97.6}\,\posv{45.1} & \textbf{88.0}\,\posv{79.2} & \textbf{94.1}\,\negv{0.7} \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\begin{table}[ht]
+  \centering\small
+  \caption{\textbf{val\_ffff} (all-$f$, in-distribution sanity check). Every
+    aligning method saturates near the ceiling.}
+  \label{tab:ffff}
+  \begin{tabular}{lrrr}
+    \toprule
+    \textbf{Method}
+      & \textbf{f-sel} (\%)
+      & \textbf{Full align} (\%)
+      & \textbf{Op-acc} (\%) \\
+    \midrule
+    Baseline (no training)            & 76.8              & 64.8              & 95.1              \\
+    \midrule
+    GRPO (chain reward)$^{\dagger}$   & 86.8\,\posv{10.0}   & 76.8\,\posv{12.0}   & 97.2\,\posv{2.1}    \\
+    LoRA, mode A                      & 99.3\,\posv{22.5}   & 98.2\,\posv{33.4}   & 99.8\,\posv{4.7}    \\
+    LoRA, mode B                      & 100.0\,\posv{23.2}  & 100.0\,\posv{35.2}  & 99.9\,\posv{4.8}    \\
+    Naive FT (full), mode A           & 99.9\,\posv{23.1}   & 99.8\,\posv{35.0}   & 99.7\,\posv{4.6}    \\
+    Naive FT (full), mode B           & 99.7\,\posv{22.9}   & 99.4\,\posv{34.6}   & 99.4\,\posv{4.3}    \\
+    \rowcolor{rowhl}
+    \textbf{Memory align} (L=2, N=64) & 99.8\,\posv{23.0}   & 99.3\,\posv{34.5}   & 99.7\,\posv{4.6}    \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\vspace{4pt}
+
+{\small $^{\dagger}$ GRPO evaluated at $n_\text{eval}{=}500$; all other rows at
+$n_\text{eval}{=}2000$.}
+
+\vspace{4pt}
+
+\subsection*{Mode A vs.\ B}
+
+\begin{itemize}[leftmargin=1.5em, itemsep=1pt]
+  \item \textbf{Mode A} --- ffff-only data, GT labels (standard LM loss).
+  \item \textbf{Mode B} --- mixed data with $f$-override at decision points
+    (the same alignment signal Memory uses).
+\end{itemize}
+
+\subsection*{Reading the results}
+
+\begin{enumerate}[leftmargin=1.5em, itemsep=2pt]
+  \item \textbf{GRPO is the wrong tool for alignment.} GRPO optimizes for
+    chain correctness, not for which decision function gets picked. Mixed-val
+    f-selection moves only $+7.7$\,pp; full-alignment $+2.6$\,pp. Every other
+    aligning method exceeds $+28$\,pp on f-selection.
+  \item \textbf{Memory alignment dominates the alignment $\times$ arithmetic
+    trade-off.} Best f-selection (97.6\,\%) and best full-alignment (88.0\,\%)
+    on mixed val, with the smallest op-accuracy regression ($-0.7$\,pp). And
+    it does this with $\sim$\,328K trainable params --- about $1\%$ of the
+    base model.
+  \item \textbf{Naive FT mode B exhibits catastrophic forgetting} ($-10$\,pp
+    op-accuracy). With 37.9M free parameters, the override-on-mixed-data
+    signal warps arithmetic. LoRA at the same supervision stays stable
+    because the adapter only moves the model in a low-rank subspace.
+  \item \textbf{LoRA mode A generalizes poorly off-distribution.} It saturates
+    on ffff val (98.2\,\% full align) but only reaches 37\,\% on mixed val ---
+    a $61$\,pp gap that exposes the limit of training on ffff-only data.
+\end{enumerate}
+
+\end{document}

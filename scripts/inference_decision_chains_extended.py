@@ -115,6 +115,22 @@ def load_model_and_tokenizer(cfg):
     hf_model.cuda()
     hf_model.eval()
 
+    mem_path = cfg.inference.get("memory_weights", None)
+    if mem_path:
+        mem_path_abs = to_absolute_path(mem_path)
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "memory_experiment"))
+        from exp import MemoryAttention, register_hooks
+        ckpt = torch.load(mem_path_abs, map_location="cuda")
+        memory = MemoryAttention(ckpt["hidden_dim"], ckpt["n_entries"], ckpt["use_gate"])
+        memory.load_state_dict(ckpt["state_dict"])
+        memory.to("cuda").to(torch.bfloat16).eval()
+        for p in memory.parameters():
+            p.requires_grad = False
+        register_hooks(hf_model, memory, ckpt["layers"])
+        hf_model._memory_module = memory
+        log.info(f"Loaded memory from {mem_path_abs} (layers={ckpt['layers']}, "
+                 f"n_entries={ckpt['n_entries']}, use_gate={ckpt['use_gate']})")
+
     tokenizer = PreTrainedTokenizerFast(
         tokenizer_file=to_absolute_path(cfg.data.tokenizer_path)
     )
@@ -136,6 +152,13 @@ def load_test_data(cfg):
     meta_file = os.path.join(os.path.dirname(test_file), "metadata.json")
     with open(meta_file) as f:
         metadata = json.load(f)
+
+    filter_combo = cfg.inference.get("filter_df_combo", None)
+    if filter_combo:
+        target = list(filter_combo) if isinstance(filter_combo, str) else list(filter_combo)
+        before = len(raw_data)
+        raw_data = [ex for ex in raw_data if ex.get("decision_funcs") == target]
+        log.info(f"Filter df_combo={target}: {before} -> {len(raw_data)} examples")
 
     # Deduplicate by input string, keeping chain length
     seen = {}
