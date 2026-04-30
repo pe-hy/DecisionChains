@@ -63,7 +63,7 @@ $f$. Two evaluation slices:
     \midrule
     Baseline (no training)            & 52.5             & 8.8              & 94.8             \\
     \midrule
-    GRPO (chain reward)$^{\dagger}$   & 60.2\,\posv{7.7}   & 11.4\,\posv{2.6}   & 93.9\,\negv{0.9}   \\
+    GRPO (per-step $f$ reward)$^{\dagger}$   & 60.2\,\posv{7.7}   & 11.4\,\posv{2.6}   & 93.9\,\negv{0.9}   \\
     LoRA, mode A                      & 81.6\,\posv{29.1}  & 37.2\,\posv{28.4}  & 94.3\,\negv{0.5}   \\
     LoRA, mode B                      & 96.6\,\posv{44.1}  & 83.5\,\posv{74.6}  & 89.3\,\negv{5.5}   \\
     Naive FT (full), mode A           & 96.0\,\posv{43.5}  & 84.2\,\posv{75.3}  & 92.6\,\negv{2.1}   \\
@@ -88,7 +88,7 @@ $f$. Two evaluation slices:
     \midrule
     Baseline (no training)            & 76.8              & 64.8              & 95.1              \\
     \midrule
-    GRPO (chain reward)$^{\dagger}$   & 86.8\,\posv{10.0}   & 76.8\,\posv{12.0}   & 97.2\,\posv{2.1}    \\
+    GRPO (per-step $f$ reward)$^{\dagger}$   & 86.8\,\posv{10.0}   & 76.8\,\posv{12.0}   & 97.2\,\posv{2.1}    \\
     LoRA, mode A                      & 99.3\,\posv{22.5}   & 98.2\,\posv{33.4}   & 99.8\,\posv{4.7}    \\
     LoRA, mode B                      & 100.0\,\posv{23.2}  & 100.0\,\posv{35.2}  & 99.9\,\posv{4.8}    \\
     Naive FT (full), mode A           & 99.9\,\posv{23.1}   & 99.8\,\posv{35.0}   & 99.7\,\posv{4.6}    \\
@@ -101,8 +101,14 @@ $f$. Two evaluation slices:
 
 \vspace{4pt}
 
-{\small $^{\dagger}$ GRPO evaluated at $n_\text{eval}{=}500$; all other rows at
-$n_\text{eval}{=}2000$.}
+{\small $^{\dagger}$ GRPO reward = per-decision-step fraction picking $f$,
+gated on arithmetic validity (Run 6 of 7 explored variants; the best
+alignment-vs-arithmetic trade-off found). Binary chain-correctness reward
+(Run 1) collapsed pass@1 0.69$\to$0.21; per-step $\pm 1$-on-$f$ advantages
+(Run 7) lifted per-step $f$-rate to $\approx 76\%$ but broke arithmetic
+(blocks\_valid 0.65, pass@1 0.31). No GRPO recipe achieved alignment and
+arithmetic simultaneously. GRPO evaluated at $n_\text{eval}{=}500$; all
+other rows at $n_\text{eval}{=}2000$.}
 
 \vspace{4pt}
 
@@ -117,10 +123,15 @@ $n_\text{eval}{=}2000$.}
 \subsection*{Reading the results}
 
 \begin{enumerate}[leftmargin=1.5em, itemsep=2pt]
-  \item \textbf{GRPO is the wrong tool for alignment.} GRPO optimizes for
-    chain correctness, not for which decision function gets picked. Mixed-val
-    f-selection moves only $+7.7$\,pp; full-alignment $+2.6$\,pp. Every other
-    aligning method exceeds $+28$\,pp on f-selection.
+  \item \textbf{GRPO is the wrong tool for alignment.} Across 7 reward
+    variants explored, none achieved alignment without breaking arithmetic.
+    The shown row uses a dense per-step $f$-reward gated on arithmetic
+    validity --- the only variant that kept arithmetic intact, but moves
+    f-selection only $+7.7$\,pp and full-alignment $+2.6$\,pp. More
+    aggressive variants (per-step $\pm 1$ advantages) reach $\sim 76\%$
+    per-step $f$-rate but collapse arithmetic (pass@1 $0.69\to 0.31$).
+    Every other aligning method exceeds $+28$\,pp on f-selection while
+    keeping op-acc.
   \item \textbf{Memory alignment dominates the alignment $\times$ arithmetic
     trade-off.} Best f-selection (97.6\,\%) and best full-alignment (88.0\,\%)
     on mixed val, with the smallest op-accuracy regression ($-0.7$\,pp). And

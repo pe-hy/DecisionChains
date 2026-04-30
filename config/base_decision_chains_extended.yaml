@@ -77,6 +77,7 @@ inference:
   embed_intermediate_idx: 0  # which intermediate result vector to embed (0=first, 1=second, etc.)
   html_samples: 500  # limit examples in HTML visualization (0=all)
   filter_df_combo: null  # filter val.json to entries with this decision_funcs combo (e.g. "ffff")
+  filter_df_all_letter: null  # filter to entries where all decision_funcs == this letter (e.g. "f"), any length
   memory_weights: null  # optional path to memory_experiment .pt for inference-time alignment
   sampling:
     sample_test_set: False

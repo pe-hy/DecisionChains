@@ -88,17 +88,18 @@ def fig_metrics():
         for b, v in zip(bars, vals[:, j]):
             ax.text(b.get_x() + b.get_width() / 2, v + 1.2,
                     f"{v:.1f}", ha="center", va="bottom",
-                    fontsize=7.5, color="#1b2330", rotation=90)
+                    fontsize=7.5, color="#1b2330")
 
     ax.set_xticks(x)
-    ax.set_xticklabels(metrics)
+    ax.set_xticklabels(metrics, fontsize=11)
     ax.set_ylabel("Score (%)")
     ax.set_ylim(0, 110)
     ax.set_yticks([0, 25, 50, 75, 100])
     ax.set_title("Method comparison — val_full (mixed pattern, n=2000;  GRPO@n=500)")
     ax.grid(axis="y", linestyle="--", color="#dde2eb", linewidth=0.8, zorder=0)
     ax.set_axisbelow(True)
-    ax.legend(loc="upper left", frameon=False, ncol=2, fontsize=9)
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.12),
+              frameon=False, ncol=4, fontsize=9)
 
     fig.tight_layout()
     out_png = OUT_DIR / "fig_metrics.png"
@@ -111,80 +112,90 @@ def fig_metrics():
 
 
 def per_step_entropy(npz_path: Path, max_steps: int = 5):
-    """Return list of arrays — one per decision-point step, of entropies
-    (one entry per example that has that step)."""
+    """Per-example, per-step entropy. Shape (N_examples, max_steps),
+    NaN when example has no valid probs at that step."""
     d = np.load(npz_path, allow_pickle=True)
     per_step = d["per_step_probs"]
-    by_step = [[] for _ in range(max_steps)]
-    for ex in per_step:
+    N = len(per_step)
+    out = np.full((N, max_steps), np.nan, dtype=np.float64)
+    for i, ex in enumerate(per_step):
         for s, p in enumerate(ex[:max_steps]):
             p = np.asarray(p, dtype=np.float64)
             if np.isnan(p).any():
                 continue
             mask = p > 0
-            h = -float(np.sum(p[mask] * np.log(p[mask])))
-            by_step[s].append(h)
-    return [np.asarray(xs) for xs in by_step]
+            out[i, s] = -float(np.sum(p[mask] * np.log(p[mask])))
+    return out
 
 
 def fig_entropies():
-    fig, ax = plt.subplots(figsize=(11.5, 4.6))
-    max_steps = 5  # show 4 GT decision points + 1 overshoot
-
-    # Compute per-method per-step mean+std
+    max_steps = 5
+    matrices = {m: per_step_entropy(p, max_steps) for m, p in NPZ.items()}
+    valid_all = np.all(
+        np.stack([~np.isnan(M) for M in matrices.values()], axis=0),
+        axis=0,
+    )
     summary = {}
-    for method, path in NPZ.items():
-        by_step = per_step_entropy(path, max_steps)
-        means = np.array([xs.mean() if len(xs) else np.nan for xs in by_step])
-        stds  = np.array([xs.std()  if len(xs) else np.nan for xs in by_step])
-        ns    = np.array([len(xs)   for xs in by_step])
-        summary[method] = (means, stds, ns)
+    for method, M in matrices.items():
+        means = np.full(max_steps, np.nan)
+        ns    = np.zeros(max_steps, dtype=int)
+        for s in range(max_steps):
+            mask = valid_all[:, s]
+            ns[s] = mask.sum()
+            if ns[s] > 0:
+                means[s] = M[mask, s].mean()
+        summary[method] = (means, ns)
 
-    # Trim trailing all-nan steps
     last = max_steps
     while last > 0 and all(np.isnan(summary[m][0][last - 1]) for m in summary):
         last -= 1
     steps = np.arange(1, last + 1)
 
-    width = 0.10
     methods = list(NPZ.keys())
-    for j, m in enumerate(methods):
-        means, _, ns = summary[m]
-        offsets = (j - (len(methods) - 1) / 2) * width
-        bars = ax.bar(steps + offsets, means[:last],
-                      width=width, color=COLORS[m], label=m,
-                      edgecolor="white", linewidth=0.6)
-        for b, v in zip(bars, means[:last]):
-            if not np.isnan(v):
-                ax.text(b.get_x() + b.get_width() / 2, v + 0.005,
-                        f"{v:.2f}", ha="center", va="bottom",
-                        fontsize=7.5, color="#1b2330", rotation=90)
+    data = np.array([summary[m][0][:last] for m in methods])  # (M, last)
+    ns_per_step = [summary[methods[0]][1][s] for s in range(last)]
 
-    ax.set_xticks(steps)
-    # Sample-size annotations under each DP (n varies across methods at DP5)
-    counts_text = []
-    for s_i, _ in enumerate(steps):
-        ns_at_step = [summary[m][2][s_i] for m in methods]
-        if min(ns_at_step) == max(ns_at_step):
-            counts_text.append(f"n={ns_at_step[0]}")
-        else:
-            counts_text.append(f"n={min(ns_at_step)}–{max(ns_at_step)}")
-    ax.set_xticklabels([f"DP {s}\n{c}" for s, c in zip(steps, counts_text)])
-    ax.set_xlabel("Decision point in chain")
-    ax.set_ylabel("Mean Shannon entropy (nats)")
+    fig, ax = plt.subplots(figsize=(10.5, 5.2))
+    cmap = plt.get_cmap("YlOrRd")
+    vmax = float(np.nanmax(data))
+    im = ax.imshow(data, aspect="auto", cmap=cmap, vmin=0, vmax=vmax)
+
+    ax.set_xticks(np.arange(last))
+    ax.set_xticklabels([f"DP {s}\nn={ns_per_step[s_i]}"
+                        for s_i, s in enumerate(steps)],
+                       fontsize=10)
+    ax.set_yticks(np.arange(len(methods)))
+    ax.set_yticklabels(methods, fontsize=10)
+
+    # Color row tick labels by method color
+    for tick_label, m in zip(ax.get_yticklabels(), methods):
+        tick_label.set_color(COLORS[m])
+        tick_label.set_fontweight("bold")
+
+    # Annotate each cell with value
+    for i in range(len(methods)):
+        for j in range(last):
+            v = data[i, j]
+            if np.isnan(v):
+                continue
+            txt_color = "white" if v > vmax * 0.55 else "#1b2330"
+            ax.text(j, i, f"{v:.2f}",
+                    ha="center", va="center",
+                    fontsize=10.5, color=txt_color, fontweight="bold")
+
     ax.set_title(
-        "Per-decision-point entropy — 128 $f$-only-solvable val examples\n"
-        "lower = model more confident in its next-letter choice  ·  DP 5 = post-overshoot"
+        "Per-decision-point entropy — 768 $f$-only-solvable val examples\n"
+        "lower (lighter) = model more confident in its next-letter choice",
+        pad=12,
     )
-    ymax = 0.0
-    for m in methods:
-        means, _, _ = summary[m]
-        ymax = max(ymax, np.nanmax(means[:last]))
-    ax.set_ylim(0, ymax * 1.5 + 0.02)
-    ax.grid(axis="y", linestyle="--", color="#dde2eb", linewidth=0.8, zorder=0)
-    ax.set_axisbelow(True)
 
-    ax.legend(loc="upper right", frameon=False, ncol=2, fontsize=9)
+    cbar = fig.colorbar(im, ax=ax, fraction=0.030, pad=0.02)
+    cbar.set_label("Mean Shannon entropy (nats)", fontsize=10)
+    cbar.ax.tick_params(labelsize=9)
+
+    ax.tick_params(top=False, bottom=False, left=False, right=False)
+    for spine in ax.spines.values():
+        spine.set_visible(False)
     fig.tight_layout()
     out_png = OUT_DIR / "fig_entropies.png"
     out_pdf = OUT_DIR / "fig_entropies.pdf"
@@ -195,6 +206,118 @@ def fig_entropies():
     print(f"Wrote {out_pdf}")
 
 
+def fig_metrics_by_length():
+    """Lenient solution rate per chain length, per method.
+    Lenient = every step picked f-letter, every block arithmetically valid,
+    final vec equals OUTPUT vec; chain length is allowed to differ from GT."""
+    import json
+    lenient_path = REPO / "outputs/eval_results/figures/lenient_metric.json"
+    if not lenient_path.exists():
+        raise FileNotFoundError(
+            f"Run scripts/recompute_lenient_metric.py first ({lenient_path})"
+        )
+    data = json.load(open(lenient_path))
+    lengths = [3, 4, 5]
+    methods = list(NPZ.keys())
+    vals = np.zeros((len(lengths), len(methods)))
+    for j, m in enumerate(methods):
+        for i, L in enumerate(lengths):
+            vals[i, j] = 100.0 * data[m][str(L)]["rate"]
+
+    fig, ax = plt.subplots(figsize=(10.5, 4.4))
+    bar_w = 0.10
+    x = np.arange(len(lengths))
+    for j, m in enumerate(methods):
+        bars = ax.bar(
+            x + (j - (len(methods) - 1) / 2) * bar_w,
+            vals[:, j],
+            width=bar_w,
+            label=m,
+            color=COLORS[m],
+            edgecolor="white",
+            linewidth=0.6,
+        )
+        for b, v in zip(bars, vals[:, j]):
+            ax.text(b.get_x() + b.get_width() / 2, v + 1.0,
+                    f"{v:.1f}", ha="center", va="bottom",
+                    fontsize=7.5, color="#1b2330")
+
+    ax.set_xticks(x)
+    ax.set_xticklabels([f"length {L}\n(n=256)" for L in lengths])
+    ax.set_ylabel("Solution rate (%)")
+    ax.set_ylim(0, 110)
+    ax.set_yticks([0, 25, 50, 75, 100])
+    ax.set_title(
+        "Solution rate by chain length — 768 $f$-only-solvable val (256 per length)\n"
+        "all steps picked $f$ · all arithmetic valid · final vec matches OUTPUT (length-agnostic)"
+    )
+    ax.grid(axis="y", linestyle="--", color="#dde2eb", linewidth=0.8, zorder=0)
+    ax.set_axisbelow(True)
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.14),
+              frameon=False, ncol=4, fontsize=9)
+    fig.tight_layout()
+    out_png = OUT_DIR / "fig_metrics_by_length.png"
+    out_pdf = OUT_DIR / "fig_metrics_by_length.pdf"
+    fig.savefig(out_png, dpi=200, bbox_inches="tight")
+    fig.savefig(out_pdf, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Wrote {out_png}")
+    print(f"Wrote {out_pdf}")
+
+
+def fig_metrics_aggregate():
+    """Single bar per method: lenient solution rate aggregated across all
+    768 examples (= weighted mean across length 3/4/5 since 256 each)."""
+    import json
+    lenient_path = REPO / "outputs/eval_results/figures/lenient_metric.json"
+    data = json.load(open(lenient_path))
+    methods = list(NPZ.keys())
+    vals = []
+    for m in methods:
+        hit = sum(data[m][L]["hit"] for L in data[m])
+        tot = sum(data[m][L]["total"] for L in data[m])
+        vals.append(100.0 * hit / tot if tot else 0.0)
+
+    fig, ax = plt.subplots(figsize=(9.5, 4.6))
+    x = np.arange(len(methods))
+    handles = []
+    for j, m in enumerate(methods):
+        bar = ax.bar(x[j], vals[j],
+                     width=0.65,
+                     color=COLORS[m],
+                     edgecolor="white",
+                     linewidth=0.8,
+                     label=m)
+        handles.append(bar)
+        ax.text(x[j], vals[j] + 1.5,
+                f"{vals[j]:.1f}", ha="center", va="bottom",
+                fontsize=10, color="#1b2330")
+
+    ax.set_xticks(x)
+    ax.set_xticklabels([""] * len(methods))
+    ax.set_ylabel("Solution rate (%)")
+    ax.set_ylim(0, 110)
+    ax.set_yticks([0, 25, 50, 75, 100])
+    ax.set_title(
+        "Aggregate solution rate — 768 $f$-only-solvable val (lengths 3, 4, 5)\n"
+        "all steps picked $f$ · all arithmetic valid · final vec matches OUTPUT"
+    )
+    ax.grid(axis="y", linestyle="--", color="#dde2eb", linewidth=0.8, zorder=0)
+    ax.set_axisbelow(True)
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.08),
+              frameon=False, ncol=4, fontsize=9)
+    fig.tight_layout()
+    out_png = OUT_DIR / "fig_metrics_aggregate.png"
+    out_pdf = OUT_DIR / "fig_metrics_aggregate.pdf"
+    fig.savefig(out_png, dpi=200, bbox_inches="tight")
+    fig.savefig(out_pdf, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Wrote {out_png}")
+    print(f"Wrote {out_pdf}")
+
+
 if __name__ == "__main__":
     fig_metrics()
     fig_entropies()
+    fig_metrics_by_length()
+    fig_metrics_aggregate()

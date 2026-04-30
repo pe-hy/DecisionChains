@@ -160,6 +160,14 @@ def load_test_data(cfg):
         raw_data = [ex for ex in raw_data if ex.get("decision_funcs") == target]
         log.info(f"Filter df_combo={target}: {before} -> {len(raw_data)} examples")
 
+    filter_all = cfg.inference.get("filter_df_all_letter", None)
+    if filter_all:
+        before = len(raw_data)
+        raw_data = [ex for ex in raw_data
+                    if ex.get("decision_funcs")
+                    and all(d == filter_all for d in ex["decision_funcs"])]
+        log.info(f"Filter df_all={filter_all}: {before} -> {len(raw_data)} examples")
+
     # Deduplicate by input string, keeping chain length
     seen = {}
     unique_inputs = []  # list of (input_str, chain_length, input_vec)
